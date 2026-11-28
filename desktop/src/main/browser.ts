@@ -193,7 +193,7 @@ type Closing = CdpRetirement["reason"] | "idle";
  * What an unloaded web page needs to load again hidden for an agent: one per
  * display the core still retains, so the core's inventory bounds them.
  */
-type Unloaded = { workspace: string; id: string; area_id: string; url: string; load: number; device: BrowserDevicePlacement | null; bounds: BrowserRect | null };
+type Unloaded = { workspace: string; id: string; area_id: string; url: string; load: number; device: BrowserDevicePlacement | null; bounds: BrowserRect | null; grant?: string };
 
 /** The idle bound and its check, with the clock both read; tests shorten them. */
 export type IdleClock = { bound: number; every: number; now: () => number };
@@ -371,19 +371,21 @@ export class BrowserViews {
 
   /**
    * Only display pages enter CDP. The shell and popup windows are absent. A
-   * page of the file partition is listed as `local`, which the gateway shows
-   * to the comment capability alone (BROWSER_DISPLAYS.md, Comment mode).
+   * page of the file partition is listed as `local` `checkout` and an outside
+   * file's as `local` `outside`, which the gateway shows only to the purposes
+   * that see them (`seesPage`; BROWSER_DISPLAYS.md, Comment mode and Agent
+   * page commands).
    */
   cdpPages(): CdpPage[] {
     const result: CdpPage[] = [];
     for (const page of this.pages.values()) {
       const area_id = this.cdpAreas.get(page.key);
       const contents = page.view.webContents;
-      // An outside file is the operator's alone: no capability, Comment's
-      // included, ever reaches it (B18).
       // A remote screen's page is that computer's: no capability here reaches it.
-      if (!area_id || contents.isDestroyed() || page.grant || page.source.remote) continue;
-      if (!page.fileRestricted) result.push({ workspace: page.workspace, area_id, id: page.id, local: true, contents });
+      if (!area_id || contents.isDestroyed() || page.source.remote) continue;
+      // An outside file reaches only the file capability of the pane that opened it, which hided alone names (B18).
+      if (page.grant) result.push({ workspace: page.workspace, area_id, id: page.id, local: "outside", contents });
+      else if (!page.fileRestricted) result.push({ workspace: page.workspace, area_id, id: page.id, local: "checkout", contents });
       else if (!isFileAddress(page.state.url) && !isFileAddress(page.route?.source_url ?? "") && !isFileAddress(contents.getURL())
         && !page.cdpFileFrame) {
         result.push({ workspace: page.workspace, area_id, id: page.id, contents });
@@ -1055,8 +1057,8 @@ export class BrowserViews {
    * and `--wait` find it loaded and the desk later shows the same page, and
    * it counts toward `MAX_LIVE_VIEWS` as just seen. A live page loads a newer
    * stamp where it is. One the core asks nothing of follows its address and
-   * stamp, for `cdpRevive`. An outside file names no address and loads only
-   * when shown.
+   * stamp, for `cdpRevive`. An outside file names no address: it loads when
+   * shown, or when the agent that opened it drives it (`cdpRevive`, by its grant).
    */
   private offScreen(window: BrowserWindow, row: BrowserSync["retained"][number], now: number, baseline: number | null): void {
     if (row.url === undefined || row.load === undefined) return;
@@ -1064,9 +1066,9 @@ export class BrowserViews {
     const live = this.pages.get(key);
     const record = this.unloaded.get(key);
     if (!live && (baseline === null || row.load <= baseline)) {
-      // Only a web page enters CDP, so only it is loaded for an agent's connection.
+      // A web page and a checkout's file page enter CDP, so either is loaded again for an agent's connection.
       if (record) Object.assign(record, { url: row.url, load: row.load, area_id: row.area_id });
-      else if (!isFileAddress(row.url)) this.unloaded.set(key, { workspace: row.workspace, id: row.id, area_id: row.area_id, url: row.url, load: row.load, device: null, bounds: null });
+      else this.unloaded.set(key, { workspace: row.workspace, id: row.id, area_id: row.area_id, url: row.url, load: row.load, device: null, bounds: null });
       return;
     }
     const { page, changed } = this.refresh(this.local, window, row.workspace, { id: row.id, area_id: row.area_id, url: row.url, load: row.load, rect: null, visible: false });
@@ -2084,11 +2086,17 @@ export class BrowserViews {
     return { jpeg: new Uint8Array(fitted.toJPEG(STILL_QUALITY)) };
   }
 
-  async cdpRevive(scope: CdpScope): Promise<"none" | "loaded" | "failed"> {
+  /**
+   * Loads a display's page again, hidden, for an agent's connection to it: one this host
+   * unloaded, by its record, or an outside page by `grant`, which hided read from the core's
+   * display, since no inventory row names it; this window holds the grant while a tab stands on it.
+   */
+  async cdpRevive(scope: CdpScope, grant?: string): Promise<"none" | "loaded" | "failed"> {
     const window = this.window;
     if (!window || !scope.display_id) return "none";
     const key = viewKey(scope.workspace, scope.display_id);
-    const record = this.unloaded.get(key);
+    const record: Unloaded | undefined = grant === undefined ? this.unloaded.get(key)
+      : this.externals.pageUrl(grant) ? { workspace: scope.workspace, id: scope.display_id, area_id: scope.area_id, url: "", load: 0, device: null, bounds: null, grant } : undefined;
     if (!record || record.area_id !== scope.area_id || this.cdpAreas.get(key) !== scope.area_id) return "none";
     let page = this.pages.get(key);
     if (page && !page.state.loading && !page.state.failure) {
@@ -2096,9 +2104,10 @@ export class BrowserViews {
       return "none";
     }
     if (!page || page.state.failure) {
-      if (page) this.load(page, record.url);
+      const display = { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false, ...(record.grant ? { grant: record.grant } : {}) };
+      if (page) this.load(page, this.addressOf(display));
       else {
-        page = this.create(this.local, window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
+        page = this.create(this.local, window, record.workspace, display);
         page.device = record.device;
         // A page never shown here lays out where an off-screen load would (B32).
         page.bounds = record.bounds ?? offScreenBounds(window.getContentBounds());
@@ -2143,8 +2152,8 @@ export class BrowserViews {
       // The core reports the page `unloaded` until it shows or an agent drives it again.
       this.emit(page.source, { kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
       const area_id = this.cdpAreas.get(page.key);
-      // Only a web page enters CDP, so only it can be loaded again for an agent.
-      if (area_id && page.fileRestricted && !page.grant && !isFileAddress(page.state.url)) {
+      // A web page and a checkout's file page enter CDP, so either can be loaded again for an agent.
+      if (area_id && !page.grant && (!page.fileRestricted || !isFileAddress(page.state.url))) {
         this.unloaded.set(page.key, { workspace: page.workspace, id: page.id, area_id, url: page.state.url, load: page.applied, device: page.device, bounds: page.bounds });
       }
       this.log.event("browser.unloaded", { id: page.id, reason: reason === "idle" ? "idle" : "cap" });

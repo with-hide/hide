@@ -120,6 +120,15 @@ impl Capability {
         }
     }
 
+    /// Whether this caller drives the `file:` pages of its Workspace and the
+    /// outside pages it opened (`docs/BROWSER_DISPLAYS.md`, Agent page
+    /// commands): an agent or shell in one of the operator's panes, which
+    /// reads those files through its own shell already. A bot in any mode,
+    /// Desk and a shell bound only to a checkout never do.
+    pub(crate) fn drives_file_pages(&self) -> bool {
+        self.reach().is_none() && matches!(self.binding, Binding::Pane { .. })
+    }
+
     /// The shell a pane-bound credential was proved against; none for any
     /// other binding.
     fn pane_shell(&self) -> Option<i32> {
@@ -2350,6 +2359,48 @@ mod tests {
             },
         ] {
             assert_eq!(terminal(binding), None);
+        }
+    }
+
+    /// Only an operator's pane drives file pages: a bot of either mode, Desk
+    /// and a checkout-bound shell keep web pages only.
+    #[test]
+    fn only_an_operators_pane_drives_file_pages() {
+        let pid = std::process::id() as i32;
+        let capability = |binding: Binding, access_mode| Capability {
+            pane_id: "w1:p1".into(),
+            caller_alias: "w1:p1".into(),
+            context: hide_core::desk::desk_context("local"),
+            binding,
+            one_shot: true,
+            holder: None,
+            created: Instant::now(),
+            claimed: false,
+            path: PathBuf::new(),
+            remote: None,
+            access_mode,
+        };
+        let pane = || Binding::Pane {
+            terminal_id: "terminal-1".into(),
+            shell_pid: pid,
+            shell_started: 1,
+        };
+        assert!(capability(pane(), None).drives_file_pages());
+        // A mode on a pane-bound credential is a bot's, which never drives one.
+        for mode in [hide_core::access::Mode::All, hide_core::access::Mode::Own] {
+            assert!(!capability(pane(), Some(mode)).drives_file_pages());
+            assert!(
+                !capability(
+                    Binding::Access {
+                        connection: "0123456789abcdef".into(),
+                    },
+                    Some(mode),
+                )
+                .drives_file_pages()
+            );
+        }
+        for binding in [Binding::Checkout, Binding::Desk { pid, started: 1 }] {
+            assert!(!capability(binding, None).drives_file_pages());
         }
     }
 

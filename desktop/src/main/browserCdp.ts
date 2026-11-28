@@ -23,13 +23,21 @@ export type CdpPage = {
   workspace: string;
   area_id: string;
   id: string;
-  /** A page of the file partition: only a comment capability reaches it (`BROWSER_DISPLAYS.md`, Comment mode). */
-  local?: boolean;
+  /**
+   * A page of a local file, which only a capability with a purpose reaches (`seesPage`):
+   * `checkout` for a checkout's HTML file in the file partition, `outside` for a file
+   * outside every checkout (`BROWSER_DISPLAYS.md`, Comment mode and Agent page commands).
+   */
+  local?: "checkout" | "outside";
   contents: { id: number; debugger: PageDebugger; isDestroyed(): boolean; getURL(): string; getTitle(): string };
 };
 export type CdpScope = { workspace: string; area_id: string; display_id?: string };
-/** What a capability is for. None is an agent's; `comment` is the operator's Comment mode, held by hided alone. */
-export type CdpPurpose = "comment";
+/**
+ * What a capability is for. None is an agent's, for web pages; `comment` is the operator's
+ * Comment mode, held by hided alone; `file` is an operator's pane driving one file page,
+ * which hided names only for such a caller and only for a page it may drive.
+ */
+export type CdpPurpose = "comment" | "file";
 export type CdpAction = { action: "open" | "close" | "select"; url?: string; display_id?: string; request_id: string };
 export type CdpActionResult = { view_id: string; area_id: string | null; load: number | null };
 export type CdpRetirement = { contentsId: number; reason: "closed" | "evicted" | "replaced" | "window_closed" };
@@ -39,8 +47,11 @@ type Options = {
   changed: (listener: (retirement?: CdpRetirement) => void) => () => void;
   action: (scope: CdpScope, action: CdpAction, signal: AbortSignal) => Promise<CdpActionResult>;
   attached: (page: CdpPage, attached: boolean) => void;
-  /** Loads a display's unloaded page again, hidden, for an agent's connection to it (`BrowserViews.cdpRevive`). */
-  revive?: (scope: CdpScope) => Promise<"none" | "loaded" | "failed">;
+  /**
+   * Loads a display's unloaded page again, hidden, for an agent's connection to it, an outside
+   * page by the grant hided read from the core's display (`BrowserViews.cdpRevive`).
+   */
+  revive?: (scope: CdpScope, grant?: string) => Promise<"none" | "loaded" | "failed">;
   /**
    * Grants this window a file outside every checkout that an agent on this
    * computer asked to open (`externalFiles.ts`, `agentOpen`): `path` is its
@@ -148,6 +159,11 @@ const COMMENT_PARAMS: Record<string, readonly string[]> = {
 };
 const MAX_COMMENT_WORLDS = 64;
 const COMMENT_EVENTS = new Set(["Runtime.bindingCalled", "Page.frameNavigated", "Page.navigatedWithinDocument", "Inspector.detached"]);
+// A file capability drives a local file page as an agent's drives a web page, and moves it
+// only as the page itself may move: no navigation of its own (a file page's web links open
+// beside it, its file links follow the page's rules), and no request interception, which
+// could answer or redirect one of the page's own loads.
+const FILE_DENIED_METHODS = new Set(["Page.navigate", "Network.setRequestInterception", "Network.continueInterceptedRequest"]);
 const SCOPED_BROWSER_METHODS = new Set(["Browser.getVersion", "Target.getTargets", "Target.getTargetInfo", "Target.getBrowserContexts", "Target.attachToTarget", "Target.detachFromTarget"]);
 // These act on the shared Chromium session or the host filesystem, even when
 // sent through a page debugger. They never reach Electron.
@@ -193,10 +209,24 @@ function fileAddress(value: string): boolean {
   try { return new URL(value).protocol === "file:"; }
   catch { return false; }
 }
-/** The purpose a `/connect` names: none, `comment` (for one display), or invalid (null). */
+/** The purpose a `/connect` names: none, `comment` or `file` (each for one display), or invalid (null). */
 function purposeOf(value: unknown, scope: CdpScope): CdpPurpose | undefined | null {
   if (!object(value) || value.purpose === undefined) return undefined;
-  return value.purpose === "comment" && scope.display_id ? "comment" : null;
+  return (value.purpose === "comment" || value.purpose === "file") && scope.display_id ? value.purpose : null;
+}
+/** The outside page's grant a file `/connect` names: none, a host grant id, or invalid (null). */
+function grantOf(value: unknown, purpose: CdpPurpose | undefined): string | undefined | null {
+  if (!object(value) || value.grant === undefined) return undefined;
+  return purpose === "file" && typeof value.grant === "string" && /^[0-9a-f]{32}$/.test(value.grant) ? value.grant : null;
+}
+/**
+ * Whether a capability of `purpose` sees `page`: a web page is an agent's and Comment's,
+ * a checkout's file page Comment's and a file capability's, and an outside page a file
+ * capability's alone, never Comment's (PRD outside-path-in-hide B18).
+ */
+function seesPage(purpose: CdpPurpose | undefined, page: CdpPage): boolean {
+  if (!page.local) return purpose !== "file";
+  return page.local === "outside" ? purpose === "file" : purpose !== undefined;
 }
 function scopeOf(value: unknown): CdpScope | null {
   if (!object(value) || typeof value.workspace !== "string" || value.workspace.length > 8192 || !/^[^\0]+\0[^\0]+$/.test(value.workspace)) return null;
@@ -313,9 +343,8 @@ export class BrowserCdpGateway {
   private eligible(capability: Capability): readonly CdpPage[] {
     const scope = capability.scope;
     if (this.options.incarnation(scope) !== capability.incarnation) { this.revoke(capability); return []; }
-    const comment = capability.purpose === "comment";
-    // A local file page exists only for a comment capability; for any other it is absent, as it always was.
-    const scoped = this.options.pages().filter((page) => page.workspace === scope.workspace && page.area_id === scope.area_id && (!scope.display_id || page.id === scope.display_id) && !page.contents.isDestroyed() && (comment || !page.local));
+    // A local file page exists only for the purposes that see it; for an agent's web capability it is absent, as it always was.
+    const scoped = this.options.pages().filter((page) => page.workspace === scope.workspace && page.area_id === scope.area_id && (!scope.display_id || page.id === scope.display_id) && !page.contents.isDestroyed() && seesPage(capability.purpose, page));
     const reachable = (page: CdpPage) => page.local ? fileAddress(page.contents.getURL()) : cdpAddress(page.contents.getURL());
     if (scoped.some((page) => capability.generations.has(page.id) && !reachable(page))) { this.revoke(capability); return []; }
     const pages = scoped.filter(reachable);
@@ -428,6 +457,8 @@ export class BrowserCdpGateway {
         if (!scope) { this.reply(response, 400, { error: "Invalid scope" }); return; }
         const purpose = purposeOf(body, scope);
         if (purpose === null) { this.reply(response, 400, { error: "Invalid purpose" }); return; }
+        const grant = grantOf(body, purpose);
+        if (grant === null) { this.reply(response, 400, { error: "Invalid grant" }); return; }
         const authorized = () => {
           const incarnation = this.options.incarnation(scope);
           return incarnation !== null && Number.isSafeInteger(incarnation) && incarnation >= 0 ? incarnation : null;
@@ -438,9 +469,9 @@ export class BrowserCdpGateway {
         // An agent's display whose page the host unloaded loads again, or
         // finishes loading again, before it is driven; any other display
         // answers `none` at once.
-        if (scope.display_id && !purpose && this.options.revive) {
+        if (scope.display_id && purpose !== "comment" && this.options.revive) {
           const revocations = this.revocations;
-          const revived = await this.options.revive(scope);
+          const revived = await this.options.revive(scope, grant);
           // A revoke during the load ended what this request was granted.
           if (this.stopped || !this.available || this.revocations !== revocations) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
           if (revived === "failed") { this.reply(response, 409, { error: "Display page failed to load" }); return; }
@@ -807,6 +838,7 @@ export class BrowserCdpGateway {
     const { method, params } = command;
     if (session) this.getSession(client, session.id);
     if (client.capability.purpose === "comment") this.commentGate(client, method, params);
+    if (client.capability.purpose === "file") this.fileGate(method, params);
     if (command.sessionId && client.browserSessions.has(command.sessionId) && !SCOPED_BROWSER_METHODS.has(method)) throw new ProtocolError("Command is outside the scoped browser session boundary");
     const requestId = intentId ?? `${Date.now()}-${secret().slice(0, 32)}`;
     if (method.startsWith("Target.")) return this.target(client, method, params, session, depth, requestId,
@@ -851,6 +883,11 @@ export class BrowserCdpGateway {
     if (Object.keys(params).some((key) => !allowed.includes(key))) throw new ProtocolError("Parameter is outside the comment boundary");
     if (method === "Runtime.addBinding" && typeof params.executionContextName !== "string") throw new ProtocolError("A comment binding belongs to its own world");
     if (method === "Runtime.evaluate" && !(typeof params.contextId === "number" && client.commentWorlds.has(params.contextId))) throw new ProtocolError("A comment evaluates only in a world it made");
+  }
+  /** What a file capability may not send, beside the agent's own boundary below; its worlds never get universal access. */
+  private fileGate(method: string, params: Json): void {
+    if (FILE_DENIED_METHODS.has(method) || method.startsWith("Fetch.")) throw new ProtocolError("Command is outside the file page boundary");
+    if (method === "Page.createIsolatedWorld" && params.grantUniveralAccess !== undefined && params.grantUniveralAccess !== false) throw new ProtocolError("Parameter is outside the file page boundary");
   }
   private async perform(client: Client, action: CdpAction, deadline: number): Promise<CdpActionResult> {
     if (Date.now() >= deadline) throw new CdpActionUncertain();
@@ -1090,7 +1127,8 @@ export class BrowserCdpGateway {
         void this.native(lease.root, "Target.detachFromTarget", { sessionId: params.sessionId }).catch(() => this.release(lease));
         return;
       }
-      if (typeof info.url === "string" && info.url.toLowerCase().startsWith("file:") && client.capability.purpose !== "comment") { this.revoke(client.capability); return; }
+      // A file frame is a web capability's end; a file page's own frames are what a file capability drives.
+      if (typeof info.url === "string" && info.url.toLowerCase().startsWith("file:") && client.capability.purpose === undefined) { this.revoke(client.capability); return; }
       if (info.type === "page") {
         if ([...client.sessions.values()].some((session) => session.lease === lease && session.nativeId === params.sessionId)) return;
         const index = lease.pageAttaches.findIndex((intent) => intent.targetId === info.targetId);

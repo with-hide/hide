@@ -726,6 +726,39 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("lists a checkout's file page and an outside page by kind, and loads an unloaded file page again for an agent", async () => {
+    try {
+      const { subject, window, page, pages, pass } = views();
+      // A page never shown lays out off screen, from the window's bounds.
+      Object.assign(window, { getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }) });
+      const file = page("report", { partition: "persist:hide-browser-file-x", fileRestricted: false, state: { url: "file:///checkout/report.html", loading: false, failure: null } });
+      (file.view.webContents as unknown as { getURL: () => string }).getURL = () => "file:///checkout/report.html";
+      page("outside", { partition: "hide-browser-external-0", fileRestricted: false, grant: "ab".repeat(16), state: { url: "file:///outside/r.html", loading: false, failure: null } });
+      page("web");
+      expect(subject.cdpPages().map((listed) => [listed.id, listed.local])).toEqual([["report", "checkout"], ["outside", "outside"], ["web", undefined]]);
+      await pass(BOUND);
+      expect(pages.size).toBe(0);
+      const created: Record<string, unknown>[] = [];
+      Reflect.set(subject, "create", (_source: unknown, _window: unknown, _owner: string, display: Record<string, unknown>) => {
+        created.push(display);
+        return page(display.id as string, { fileRestricted: false, state: { url: display.url, loading: false, failure: null } });
+      });
+      expect(await subject.cdpRevive({ workspace, area_id: "a1", display_id: "report" })).toBe("loaded");
+      expect(created).toEqual([{ id: "report", area_id: "a1", url: "file:///checkout/report.html", load: 3, rect: null, visible: false }]);
+      // An outside page leaves no record when it unloads: it loads again only by the grant hided read from the core's display, while this window holds it.
+      const outside = { workspace, area_id: "a1", display_id: "outside" };
+      const grant = (Reflect.get(subject, "externals") as ExternalFiles).grant("/outside/r.html", "html")!.id;
+      expect(await subject.cdpRevive(outside)).toBe("none");
+      expect(await subject.cdpRevive(outside, "cd".repeat(16))).toBe("none");
+      expect(await subject.cdpRevive({ ...outside, area_id: "a2" }, grant)).toBe("none");
+      expect(created).toHaveLength(1);
+      expect(await subject.cdpRevive(outside, grant)).toBe("loaded");
+      expect(created[1]).toEqual({ id: "outside", area_id: "a1", url: "", load: 0, rect: null, visible: false, grant });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("a page that closes itself", () => {

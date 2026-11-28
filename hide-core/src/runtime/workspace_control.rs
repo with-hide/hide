@@ -1260,6 +1260,7 @@ impl Runtime {
                                 .collect(),
                             operator: display.operator || display.openers.is_empty(),
                             unseen: display.unseen.is_some(),
+                            grant: display.external.as_ref().map(|file| file.grant.clone()),
                         })
                 })
                 .collect()

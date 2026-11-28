@@ -123,6 +123,33 @@ fn unavailable() -> Failure {
     )
 }
 
+/// A `file:` page asked for by a caller that is not an operator's pane: a
+/// bot in any mode, Desk, a shell bound only to a checkout.
+pub(crate) const FILE_PAGE_PANE_ONLY: Failure = (
+    "file_page_pane_only",
+    "Only an agent in a Hide pane drives a file page; serve its folder over http and open that address to drive it from here",
+);
+
+/// An outside page this caller did not open: the operator's click, or
+/// another agent's open.
+pub(crate) const OUTSIDE_PAGE_NOT_OPENED: Failure = (
+    "outside_page_not_opened",
+    "Only the agent that opened an outside page drives it; open the file yourself with hide browser open <path>",
+);
+
+/// A `file:` page asked for from another machine than the core's, or shown
+/// only in a linked node's window: such a page loads through a route, not
+/// from this machine's files.
+pub(crate) const FILE_PAGE_ELSEWHERE: Failure = (
+    "file_page_elsewhere",
+    "A file page is driven only from a pane on the computer whose Hide window loads it; serve its folder over http and open that address",
+);
+
+/// The purpose a connection to a `file:` page names to the gateway, which
+/// lists such a page to it alone (`desktop/src/main/browserCdp.ts`,
+/// `CdpPurpose`).
+const FILE_PURPOSE: &str = "file";
+
 fn supported_address(address: &str) -> Result<(), Failure> {
     if address == "about:blank"
         || address.parse::<Uri>().is_ok_and(|uri| {
@@ -494,7 +521,7 @@ impl BrowserControl {
             "The page is in a window on another computer",
         );
         let _slot = self.acquire()?;
-        let (_, _, scope) = scope_of(source, Some(display_id))?;
+        let (_, _, scope) = scope_of(source, Some(display_id), false)?;
         let host = match self.window(None)? {
             Window::Core(host) => host,
             Window::Own(_) | Window::Elsewhere(_) => return Err(ELSEWHERE_STILL),
@@ -578,16 +605,20 @@ impl BrowserControl {
     /// `hide browser connect` and `open`: the capability URLs for
     /// `display_id` (or the active area) of `source`'s checkout, for a
     /// caller that reached the core through `caller_node`'s link if it
-    /// names one.
+    /// names one, and that drives file pages when `file_pages`
+    /// (`Capability::drives_file_pages`).
     pub fn connect(
         &self,
         source: &QueryResult,
         display_id: Option<&str>,
         caller_node: Option<&str>,
+        file_pages: bool,
     ) -> Result<Value, Failure> {
         let _slot = self.acquire()?;
-        let (area_id, display_id, scope) = scope_of(source, display_id)?;
-        let (http, ws) = match self.window(caller_node)? {
+        let (area_id, display_id, scope) = scope_of(source, display_id, file_pages)?;
+        let window = self.window(caller_node)?;
+        file_page_here(&scope, caller_node, &window)?;
+        let (http, ws) = match window {
             Window::Own(link) => ask_node(&link, &scope)?,
             // A caller that came over a link is on another machine than the
             // core, so the core's own window answers it by relay only; the
@@ -606,16 +637,19 @@ impl BrowserControl {
     }
 
     /// A `hide browser` page command's relay to `display_id` of `source`'s
-    /// checkout.
+    /// checkout, for a caller that drives file pages when `file_pages`.
     pub fn relay(
         &self,
         source: &QueryResult,
         display_id: &str,
         caller_node: Option<&str>,
+        file_pages: bool,
     ) -> Result<Relay, Failure> {
         let _slot = self.acquire()?;
-        let (_, _, scope) = scope_of(source, Some(display_id))?;
-        Ok(match self.window(caller_node)? {
+        let (_, _, scope) = scope_of(source, Some(display_id), file_pages)?;
+        let window = self.window(caller_node)?;
+        file_page_here(&scope, caller_node, &window)?;
+        Ok(match window {
             Window::Own(link) => Relay::Own(ask_node_relay(&link, &scope)?),
             Window::Core(host) => Relay::Core(ask_gateway(&host, &scope)?.1),
             Window::Elsewhere(link) => Relay::Through {
@@ -627,12 +661,14 @@ impl BrowserControl {
 }
 
 /// The area, display and gateway scope of a connection to `display_id`, or
-/// to `source`'s active area.
+/// to `source`'s active area; a `file:` page's scope names the `file`
+/// purpose.
 fn scope_of(
     source: &QueryResult,
     display_id: Option<&str>,
+    file_pages: bool,
 ) -> Result<(String, Option<String>, Value), Failure> {
-    let (area_id, display_id) = connection_scope(source, display_id)?;
+    let (area_id, display_id, reach) = connection_scope(source, display_id, file_pages)?;
     let workspace = format!(
         "{}\0{}",
         source.context.device_id, source.context.checkout_path
@@ -641,7 +677,33 @@ fn scope_of(
     if let Some(id) = &display_id {
         scope["display_id"] = json!(id);
     }
+    if let Reach::File { grant } = reach {
+        scope["purpose"] = json!(FILE_PURPOSE);
+        // The window loads an outside page by its grant when no page of it
+        // is live, since no inventory row names one (`BrowserViews.cdpRevive`).
+        if let Some(grant) = grant {
+            scope["grant"] = json!(grant);
+        }
+    }
     Ok((area_id, display_id, scope))
+}
+
+/// A `file:` page is a page of the core's own window loaded from this
+/// machine's files, so it is driven only by a caller on this machine
+/// through that window: a connected device's file page and a page in a
+/// linked node's window load through a route instead, and a node's daemon
+/// takes no purpose (`node_browser.rs`, `scope_valid`).
+fn file_page_here(
+    scope: &Value,
+    caller_node: Option<&str>,
+    window: &Window,
+) -> Result<(), Failure> {
+    if scope.get("purpose").is_none()
+        || (caller_node.is_none() && matches!(window, Window::Core(_)))
+    {
+        return Ok(());
+    }
+    Err(FILE_PAGE_ELSEWHERE)
 }
 
 /// A window's bytes and the `X-Hide-Total` it sent, or its reason for none.
@@ -853,10 +915,26 @@ fn capability_url_valid(value: &str, scheme: &str, endpoint: &str) -> bool {
         && !uri.path().contains("..")
 }
 
+/// What a connection to a display reaches.
+#[derive(Debug, PartialEq, Eq)]
+enum Reach {
+    /// A web page, a blank one, or the area's pages.
+    Web,
+    /// A `file:` page: a checkout's HTML file, or an outside page, which
+    /// the window holds by its grant.
+    File { grant: Option<String> },
+}
+
+/// The area and display of a connection, and what it reaches: a `file:`
+/// page is a checkout's HTML file shown in the caller's Workspace, or an
+/// outside page (`external`) the caller opened, either only for a caller
+/// that drives file pages. An outside page the operator clicked, or another
+/// agent opened, stays theirs (PRD outside-path-in-hide B18).
 fn connection_scope(
     source: &QueryResult,
     display_id: Option<&str>,
-) -> Result<(String, Option<String>), Failure> {
+    file_pages: bool,
+) -> Result<(String, Option<String>, Reach), Failure> {
     let views = source.views.as_deref().ok_or_else(unavailable)?;
     if let Some(id) = display_id {
         let view = views
@@ -866,22 +944,26 @@ fn connection_scope(
                 "browser_display_missing",
                 "Run hide view list and choose a browser display",
             ))?;
-        // An outside file's page is the operator's click alone (PRD
-        // outside-path-in-hide B18): refused as a checkout's file page is.
-        if view.kind == "external" {
-            return Err((
-                "browser_address_unsupported",
-                "Use an http or https browser display; native file pages do not support CDP",
-            ));
-        }
-        supported_address(&view.target)?;
-        return Ok((view.area_id.clone(), Some(view.view_id.clone())));
+        let external = view.kind == "external";
+        let reach = if !external && !hide_platform::path::is_file_url(&view.target) {
+            supported_address(&view.target)?;
+            Reach::Web
+        } else if !file_pages {
+            return Err(FILE_PAGE_PANE_ONLY);
+        } else if external && !view.openers.iter().any(|opener| opener.here) {
+            return Err(OUTSIDE_PAGE_NOT_OPENED);
+        } else {
+            Reach::File {
+                grant: view.grant.clone().filter(|_| external),
+            }
+        };
+        return Ok((view.area_id.clone(), Some(view.view_id.clone()), reach));
     }
     let view = views.iter().find(|view| view.active_area).ok_or((
         "view_area_missing",
         "Open this checkout's View area and retry",
     ))?;
-    Ok((view.area_id.clone(), None))
+    Ok((view.area_id.clone(), None, Reach::Web))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1010,6 +1092,7 @@ mod tests {
                 openers: Vec::new(),
                 operator: true,
                 unseen: false,
+                grant: None,
             }]),
         }
     }
@@ -1018,15 +1101,15 @@ mod tests {
     fn display_lookup_never_accepts_a_terminal_or_foreign_display() {
         let mut source = source();
         assert_eq!(
-            connection_scope(&source, Some("browser-a")).unwrap(),
-            ("area-a".into(), Some("browser-a".into()))
+            connection_scope(&source, Some("browser-a"), true).unwrap(),
+            ("area-a".into(), Some("browser-a".into()), Reach::Web)
         );
-        assert!(connection_scope(&source, Some("other-checkout-browser")).is_err());
+        assert!(connection_scope(&source, Some("other-checkout-browser"), true).is_err());
         source.views.as_mut().unwrap()[0].kind = "terminal";
-        assert!(connection_scope(&source, Some("browser-a")).is_err());
+        assert!(connection_scope(&source, Some("browser-a"), true).is_err());
         assert_eq!(
-            connection_scope(&source, None).unwrap(),
-            ("area-a".into(), None)
+            connection_scope(&source, None, true).unwrap(),
+            ("area-a".into(), None, Reach::Web)
         );
     }
 
@@ -1289,22 +1372,26 @@ mod tests {
         // `elsewhere` without asking the gateway, and the relay still works.
         assert_eq!(
             registry
-                .connect(&source, Some("browser-a"), Some("device"))
+                .connect(&source, Some("browser-a"), Some("device"), true)
                 .unwrap_err()
                 .0,
             "browser_control_elsewhere"
         );
         assert!(bodies.lock().unwrap().is_empty());
         assert!(matches!(
-            registry.relay(&source, "browser-a", Some("device")),
+            registry.relay(&source, "browser-a", Some("device"), true),
             Ok(Relay::Core(_))
         ));
         // A pane on the core's own machine still gets the URLs.
-        assert!(registry.connect(&source, Some("browser-a"), None).is_ok());
+        assert!(
+            registry
+                .connect(&source, Some("browser-a"), None, true)
+                .is_ok()
+        );
     }
 
     #[test]
-    fn only_the_comment_capability_names_a_purpose() {
+    fn a_web_pages_connection_names_no_purpose_and_comment_names_its_own() {
         let (endpoint, bodies) = scripted_gateway();
         let registry = BrowserControl::default();
         registry
@@ -1316,10 +1403,12 @@ mod tests {
             .unwrap();
         let source = source();
         // A pane's discovery and its page command's relay.
-        registry.connect(&source, Some("browser-a"), None).unwrap();
-        registry.relay(&source, "browser-a", None).unwrap();
-        // The operator's Comment mode, on a display a pane could never drive.
-        let scope = scope_of(&source, Some("browser-a")).unwrap().2;
+        registry
+            .connect(&source, Some("browser-a"), None, true)
+            .unwrap();
+        registry.relay(&source, "browser-a", None, true).unwrap();
+        // The operator's Comment mode.
+        let scope = scope_of(&source, Some("browser-a"), false).unwrap().2;
         registry.comment_capability(&scope).unwrap();
 
         let bodies = bodies.lock().unwrap();
@@ -1331,33 +1420,119 @@ mod tests {
         assert_eq!(bodies[2]["display_id"], "browser-a");
     }
 
-    #[test]
-    fn native_file_pages_are_explicitly_unsupported_for_cdp() {
-        let mut source = source();
-        source.views.as_mut().unwrap()[0].target = "file:///checkout/index.html".into();
-        assert_eq!(
-            connection_scope(&source, Some("browser-a")).unwrap_err().0,
-            "browser_address_unsupported"
-        );
-        // The area capability is still useful for opening HTTP pages beside it.
-        assert!(connection_scope(&source, None).is_ok());
-        // An outside file's tab, whose target the core leaves empty, is refused the same way.
-        let view = &mut source.views.as_mut().unwrap()[0];
+    /// The grant an outside page's display holds in the core.
+    const GRANT: &str = "0123456789abcdef0123456789abcdef";
+
+    /// A source whose one display is a checkout's HTML file, and one whose
+    /// display is an outside page opened by `opener`.
+    fn file_sources(opener: Option<bool>) -> (QueryResult, QueryResult) {
+        let mut checkout = source();
+        checkout.views.as_mut().unwrap()[0].target = "file:///checkout/index.html".into();
+        let mut outside = source();
+        let view = &mut outside.views.as_mut().unwrap()[0];
+        // The core leaves an outside page's target empty: its path stays in the window.
         view.kind = "external";
         view.target = String::new();
+        view.grant = Some(GRANT.into());
+        view.operator = opener.is_none();
+        view.openers = opener
+            .map(|here| {
+                vec![hide_core::workspace_control::ViewOpener {
+                    name: "agent-1".into(),
+                    provider: "claude".into(),
+                    session: None,
+                    pane_id: Some("w1:p1".into()),
+                    here,
+                }]
+            })
+            .unwrap_or_default();
+        (checkout, outside)
+    }
+
+    #[test]
+    fn a_pane_drives_its_checkouts_file_pages_and_the_outside_pages_it_opened() {
+        let (checkout, outside) = file_sources(Some(true));
         assert_eq!(
-            connection_scope(&source, Some("browser-a")).unwrap_err().0,
-            "browser_address_unsupported"
+            connection_scope(&checkout, Some("browser-a"), true).unwrap(),
+            (
+                "area-a".into(),
+                Some("browser-a".into()),
+                Reach::File { grant: None }
+            )
         );
+        assert_eq!(
+            connection_scope(&outside, Some("browser-a"), true).unwrap(),
+            (
+                "area-a".into(),
+                Some("browser-a".into()),
+                Reach::File {
+                    grant: Some(GRANT.into())
+                }
+            )
+        );
+        // Its scope names the purpose the gateway lists a file page to, and
+        // an outside page's grant, by which the window loads it.
+        let scope = scope_of(&checkout, Some("browser-a"), true).unwrap().2;
+        assert_eq!(scope["purpose"], "file");
+        assert_eq!(scope["display_id"], "browser-a");
+        assert!(scope.get("grant").is_none());
+        let scope = scope_of(&outside, Some("browser-a"), true).unwrap().2;
+        assert_eq!(scope["purpose"], "file");
+        assert_eq!(scope["grant"], GRANT);
+        // A web page's and an area's scope name none.
+        assert!(
+            scope_of(&source(), Some("browser-a"), true)
+                .unwrap()
+                .2
+                .get("purpose")
+                .is_none()
+        );
+        assert!(
+            scope_of(&checkout, None, true)
+                .unwrap()
+                .2
+                .get("purpose")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn every_other_caller_is_refused_a_file_page_with_its_reason() {
+        // A bot, Desk or a shell bound only to the checkout.
+        let (checkout, outside) = file_sources(Some(true));
+        for source in [&checkout, &outside] {
+            assert_eq!(
+                connection_scope(source, Some("browser-a"), false)
+                    .unwrap_err()
+                    .0,
+                "file_page_pane_only"
+            );
+        }
+        // An outside page the operator clicked, or another agent opened.
+        for opener in [None, Some(false)] {
+            let (_, outside) = file_sources(opener);
+            assert_eq!(
+                connection_scope(&outside, Some("browser-a"), true)
+                    .unwrap_err()
+                    .0,
+                "outside_page_not_opened"
+            );
+        }
+        // The area capability still opens web pages beside a file page.
+        assert!(connection_scope(&checkout, None, false).is_ok());
         for address in [
-            "file:///checkout/index.html",
             "/checkout/index.html",
             "data:text/html,private",
             "javascript:alert(1)",
         ] {
+            let mut other = source();
+            other.views.as_mut().unwrap()[0].target = address.into();
             assert_eq!(
-                supported_address(address).unwrap_err().0,
-                "browser_address_unsupported"
+                connection_scope(&other, Some("browser-a"), true)
+                    .unwrap_err()
+                    .0,
+                "browser_address_unsupported",
+                "{address}"
             );
         }
         for address in [
@@ -1366,6 +1541,66 @@ mod tests {
             "about:blank",
         ] {
             assert!(supported_address(address).is_ok(), "{address}");
+        }
+    }
+
+    /// A file page is the core's own window's, loaded from this machine:
+    /// the gateway is asked for it with the `file` purpose, and never from
+    /// another machine or through a node's window, which take no purpose.
+    #[test]
+    fn a_file_page_is_driven_only_from_the_cores_machine_through_its_window() {
+        let (checkout, _) = file_sources(Some(true));
+        let registry = BrowserControl::default();
+        // Only a linked node's window: refused before the node is asked.
+        registry
+            .announce("mini", RemoteHost::detached("mini"), vec![4242])
+            .unwrap();
+        assert_eq!(
+            registry
+                .relay(&checkout, "browser-a", None, true)
+                .err()
+                .map(|f| f.0),
+            Some("file_page_elsewhere")
+        );
+
+        let registry = BrowserControl::default();
+        let (endpoint, bodies) = scripted_gateway();
+        registry
+            .register(Registration {
+                owner_pid: std::process::id() as i32,
+                endpoint,
+                token: "t".repeat(40),
+            })
+            .unwrap();
+        // A pane on a connected device reaches the core over its link.
+        assert_eq!(
+            registry
+                .connect(&checkout, Some("browser-a"), Some("device"), true)
+                .unwrap_err()
+                .0,
+            "file_page_elsewhere"
+        );
+        assert_eq!(
+            registry
+                .relay(&checkout, "browser-a", Some("device"), true)
+                .err()
+                .map(|f| f.0),
+            Some("file_page_elsewhere")
+        );
+        assert!(bodies.lock().unwrap().is_empty());
+        // A pane on the core's machine.
+        registry
+            .connect(&checkout, Some("browser-a"), None, true)
+            .unwrap();
+        assert!(matches!(
+            registry.relay(&checkout, "browser-a", None, true),
+            Ok(Relay::Core(_))
+        ));
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 2);
+        for asked in bodies.iter() {
+            assert_eq!(asked["purpose"], "file");
+            assert_eq!(asked["display_id"], "browser-a");
         }
     }
 
