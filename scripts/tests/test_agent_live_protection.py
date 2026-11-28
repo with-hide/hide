@@ -6,6 +6,7 @@ real-pinned-server lane owns the measurement tool's protocol acceptance.
 
 import json
 from contextlib import contextmanager
+import contextlib
 import ctypes
 import errno
 import io
@@ -856,6 +857,36 @@ class ProcessProtection(unittest.TestCase):
                         receipt.write_text('{"confirmed":false}')
                     with self.assertRaisesRegex(ProcessError, "guardian_cleanup_receipt"):
                         owner.end(child)
+
+    @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/top").exists()
+                         and Path("/usr/bin/top").stat().st_mode & 0o4000, "needs macOS's set-user-ID top")
+    def test_a_set_user_id_program_left_in_the_group_is_ended_with_it(self):
+        # The command starts top, which macOS runs set-user-ID, in its own
+        # group and exits: the guardian's sample cannot read top, and the
+        # root is a zombie it reserves. The group's end still has to reach it.
+        with tempfile.TemporaryDirectory(prefix="agent-setuid-") as name:
+            receipt = Path(name) / "top"
+            program = ("import subprocess, sys\n"
+                       "top = subprocess.Popen(['/usr/bin/top', '-l', '0', '-s', '1'],\n"
+                       "                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                       "open(sys.argv[1], 'w').write(str(top.pid))\n")
+            def end_top():
+                # A failed guardian must not leave the fixture's top behind.
+                with contextlib.suppress(FileNotFoundError, ValueError, ProcessLookupError):
+                    os.kill(int(receipt.read_text()), signal.SIGKILL)
+
+            self.addCleanup(end_top)
+            with OwnedProcesses() as owner:
+                owner.run([sys.executable, "-c", program, str(receipt)], env=dict(os.environ), seconds=10)
+            top = int(receipt.read_text())
+            end = time.monotonic() + 5
+            while True:
+                try:
+                    os.kill(top, 0)
+                except ProcessLookupError:
+                    break
+                self.assertLess(time.monotonic(), end, "top outlived its group's end")
+                time.sleep(0.05)
 
     def test_diagnostic_write_error_is_guardian_failure(self):
         with tempfile.TemporaryDirectory(prefix="agent-diagnostic-") as name:

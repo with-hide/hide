@@ -21,10 +21,10 @@ import threading
 import time
 
 if __package__:
-    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, marked_descendants, require_complete, snapshot
+    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, snapshot
     from .system import WINDOWS
 else:
-    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, marked_descendants, require_complete, snapshot
+    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, snapshot
     from system import WINDOWS
 
 if WINDOWS:
@@ -952,7 +952,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
                     else:
                         current = collect()
                         unmeasured = getattr(current, "unmeasured", ())
-                    active = any(not process.zombie for process in current.values()) or bool(unmeasured)
+                    active = live_members(current) or bool(unmeasured)
                 except BaseException:
                     active = True
                     failed = True
@@ -967,7 +967,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
                     end = time.monotonic() + 0.5
                     while time.monotonic() < end:
                         try:
-                            if not any(not p.zombie for p in collect().values()):
+                            if not live_members(collect()):
                                 break
                         except BaseException:
                             failed = True
