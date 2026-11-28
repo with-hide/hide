@@ -739,6 +739,9 @@ it("leaves a press on a message's words to the browser, so a drag can select acr
   const reached: EventTarget[] = [];
   const seen = (event: Event) => reached.push(event.target!);
   document.addEventListener("mousedown", seen);
+  // A message that takes a press finds its place by the words' boxes, which a test window does not lay out.
+  const laidOut = { getClientRects: () => [] as unknown as DOMRectList, getBoundingClientRect: () => new DOMRect() };
+  for (const [name, value] of Object.entries(laidOut)) Object.defineProperty(Range.prototype, name, { configurable: true, writable: true, value });
   try {
     const press = (target: Element, modifier = false) => {
       const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: modifier, ctrlKey: modifier });
@@ -760,6 +763,7 @@ it("leaves a press on a message's words to the browser, so a drag can select acr
     expect(container.querySelector("[data-code-block-head]")?.className).toContain("select-none");
   } finally {
     document.removeEventListener("mousedown", seen);
+    for (const name of Object.keys(laidOut)) delete (Range.prototype as unknown as Record<string, unknown>)[name];
   }
 });
 
