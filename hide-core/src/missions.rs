@@ -4450,7 +4450,10 @@ pub(crate) fn check_question(
 
 /// The other open missions of `mission`'s project on its machine: a path
 /// names a project on one machine only.
-fn neighbours<'a>(book: &'a MissionBook, mission: &'a Mission) -> impl Iterator<Item = &'a Mission> {
+fn neighbours<'a>(
+    book: &'a MissionBook,
+    mission: &'a Mission,
+) -> impl Iterator<Item = &'a Mission> {
     book.missions.iter().filter(move |other| {
         other.id != mission.id
             && other.status.open()
@@ -4465,24 +4468,26 @@ fn neighbours<'a>(book: &'a MissionBook, mission: &'a Mission) -> impl Iterator<
 pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
     let mut out = Vec::new();
     for other in neighbours(book, mission) {
+        let live = || {
+            other
+                .nodes
+                .iter()
+                .filter(|node| node.status != NodeStatus::Dropped)
+        };
+        let issues: BTreeSet<u32> = live()
+            .flat_map(|node| node.issues.iter().copied())
+            .collect();
+        let paths: Vec<String> = live().flat_map(|node| node.paths.iter().cloned()).collect();
         let mut shared_issues = BTreeSet::new();
         let mut shared_paths = BTreeSet::new();
-        let theirs = other
-            .nodes
-            .iter()
-            .filter(|node| node.status != NodeStatus::Dropped);
-        for (mine, theirs) in mission
-            .nodes
-            .iter()
-            .flat_map(|mine| theirs.clone().map(move |theirs| (mine, theirs)))
-        {
+        for node in &mission.nodes {
             shared_issues.extend(
-                mine.issues
+                node.issues
                     .iter()
                     .copied()
-                    .filter(|issue| theirs.issues.contains(issue)),
+                    .filter(|issue| issues.contains(issue)),
             );
-            shared_paths.extend(shared_code_paths(&mine.paths, &theirs.paths).cloned());
+            shared_paths.extend(shared_code_paths(&node.paths, &paths).cloned());
         }
         if !shared_issues.is_empty() || !shared_paths.is_empty() {
             out.push(Overlap {
@@ -4539,7 +4544,11 @@ fn waits_whole_on(mission: &Mission, from: &str, to: &str) -> bool {
         let Some(node) = mission.node(key) else {
             continue;
         };
-        for dependency in node.depends_on.iter().filter(|dependency| dependency.line.is_none()) {
+        for dependency in node
+            .depends_on
+            .iter()
+            .filter(|dependency| dependency.line.is_none())
+        {
             if dependency.node == to {
                 return true;
             }
@@ -4624,7 +4633,9 @@ pub(crate) fn check_paths_across(book: &MissionBook, mission: &Mission) -> Resul
                     .map(String::as_str)
                     .collect();
                 if shared.is_empty()
-                    || waits.iter().any(|wait| waits_whole_on(mission, &mine.key, wait))
+                    || waits
+                        .iter()
+                        .any(|wait| waits_whole_on(mission, &mine.key, wait))
                 {
                     continue;
                 }
@@ -5971,7 +5982,8 @@ pub(crate) mod tests {
 
     #[test]
     fn two_unstarted_change_nodes_on_the_same_code_without_depends_on_are_refused() {
-        let planned = |input: &PlanInput| apply_plan(&mission(), input, 2, InterfaceLanguage::Korean);
+        let planned =
+            |input: &PlanInput| apply_plan(&mission(), input, 2, InterfaceLanguage::Korean);
         // A folder holds what is under it; the refusal names both nodes and
         // the shared path and says to add depends_on.
         let refused = planned(&two_on_paths(
@@ -5989,14 +6001,27 @@ pub(crate) mod tests {
         );
         // A finish-line dependency starts b on a's branch, but their pull
         // requests still meet at the merge.
-        let refused = planned(&two_on_paths(&["web/src"], &["web/src"], &["a:c1"], Vec::new()))
-            .unwrap_err();
+        let refused = planned(&two_on_paths(
+            &["web/src"],
+            &["web/src"],
+            &["a:c1"],
+            Vec::new(),
+        ))
+        .unwrap_err();
         assert_eq!(
             crate::coordination::split_refusal(&refused).0,
             "mission_paths_unordered"
         );
         // depends_on orders them, directly or through another node.
-        assert!(planned(&two_on_paths(&["web/src"], &["web/src"], &["a"], Vec::new())).is_ok());
+        assert!(
+            planned(&two_on_paths(
+                &["web/src"],
+                &["web/src"],
+                &["a"],
+                Vec::new()
+            ))
+            .is_ok()
+        );
         assert!(
             planned(&two_on_paths(
                 &["web/src"],
@@ -6026,9 +6051,13 @@ pub(crate) mod tests {
 
     #[test]
     fn a_replan_keeps_a_node_at_work_done_or_dropped_on_the_same_code() {
-        let mut running =
-            apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2, InterfaceLanguage::Korean)
-                .unwrap();
+        let mut running = apply_plan(
+            &mission(),
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         for status in [NodeStatus::Working, NodeStatus::Done, NodeStatus::Dropped] {
             running.nodes[0].status = status;
             assert!(

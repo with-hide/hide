@@ -398,7 +398,15 @@ fn a_plan_on_code_another_mission_is_changing_waits_for_its_pull_request() {
             && refused.contains("fix changes web/src/App.tsx that mission-7 node n"),
         "{refused}"
     );
-    assert!(runtime.missions.book.get("mission-1").unwrap().node("fix").is_none());
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .node("fix")
+            .is_none()
+    );
     let mut after = fix;
     after["depends_on"] = json!(["wait"]);
     command(
