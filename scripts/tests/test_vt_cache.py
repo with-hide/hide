@@ -44,6 +44,7 @@ USERS = {
     ('agent-journey.yml', 'fixture'): False,
     ('agent-journey.yml', 'fake'): False,
     ('agent-trust-contract.yml', 'contract'): False,
+    ('desktop-e2e.yml', 'build'): False,
     ('desktop-e2e.yml', 'e2e'): False,
     ('perf.yml', 'measure'): False,
     ('web-e2e.yml', 'build'): False,

@@ -25,8 +25,10 @@ SAVERS = {
         # The Windows test build, the most any Windows job builds and the
         # lane's longest job; `compile` beside it only restores.
         ('windows-check.yml', 'tests'): ON_MAIN,
-        ('desktop-e2e.yml', 'e2e'):
-            "${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}",
+        # The one macOS build of a desktop e2e lane with shards; the shards
+        # build nothing, and a lone shard only restores.
+        ('desktop-e2e.yml', 'build'):
+            "${{ github.ref == 'refs/heads/main' && runner.os == 'macOS' }}",
     },
     # Clippy's check of the dependencies, which no test build makes; the Rust
     # lane's lint job runs beside its build rather than in it.
