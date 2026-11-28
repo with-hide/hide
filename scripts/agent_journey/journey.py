@@ -276,7 +276,9 @@ class Journey:
             return False
         if status == cells.FAIL:
             screen = self.capture(name, pane)
-            evidence = ", ".join(value for value in (evidence, screen, self.daemon_log(name)) if value) or None
+            hooks = hook_records.pane_record(self.runtime, pane or self.pane)
+            kept = self.evidence(f"{name}-hooks", hooks) if hooks else None
+            evidence = ", ".join(value for value in (evidence, screen, kept, self.daemon_log(name)) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 

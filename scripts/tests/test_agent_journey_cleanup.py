@@ -252,7 +252,7 @@ class FailedCellScreen(unittest.TestCase):
             def read_pane(pane, **_kwargs):
                 read.append(pane)
                 return f"screen of {pane}\n"
-            runtime = SimpleNamespace(run=Path(folder),
+            runtime = SimpleNamespace(run=Path(folder), home=Path(folder), state=Path(folder) / "state",
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
             journey = Journey(runtime, None, SimpleNamespace(read_pane=read_pane), table, {"id": "opencode", "agent_cli": "opencode", "model_flag": []},

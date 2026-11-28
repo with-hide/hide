@@ -106,7 +106,7 @@ class RefusedCell(unittest.TestCase):
             def read_pane(pane, *, lines):
                 return "screen\n"
             controller = SimpleNamespace(read_pane=read_pane)
-            runtime = SimpleNamespace(run=Path(folder),
+            runtime = SimpleNamespace(run=Path(folder), home=Path(folder), state=Path(folder) / "state",
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"codex": {name: {"status": cells.PENDING} for name in ("resume", "title")}}
             record = {}

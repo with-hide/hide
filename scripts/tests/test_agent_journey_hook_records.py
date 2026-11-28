@@ -269,3 +269,35 @@ class JourneyStarts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaneRecord(unittest.TestCase):
+    """A failed cell keeps what the pane's hooks recorded: the sessions its
+    record holds and its lines of the hooks' log, so a start that names
+    another agent's session shows whether the pane's hook named it
+    (with-hide/hide#3124). Nothing the agent was told is copied."""
+
+    def test_a_failed_cell_keeps_the_panes_sessions_and_log_lines_and_no_task(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = runtime(Path(root))
+            records = hook_records.folder(run)
+            (records / "panes").mkdir(parents=True)
+            (records / "panes" / "hW_p2.json").write_text(json.dumps({"sessions": [
+                {"agent": "antigravity", "version": 1, "session": "3e3e5f18", "turn": "done", "working": 0,
+                 "running": [{"id": "s-1", "task": "the parent's words"}]}]}))
+            (records / hook_records.LOG_NAME).write_text("\n".join([
+                json.dumps({"component": "agent_hooks", "kind": "antigravity.conversation_opened_elsewhere",
+                            "pane": "hW:p2", "event": "UserPromptSubmit", "conversation": "9aacde14"}),
+                json.dumps({"kind": "report.failed", "pane": "hV:p2"}),
+                "not json",
+            ]) + "\n")
+
+            kept = hook_records.pane_record(run, "hW:p2")
+
+            self.assertEqual(kept["sessions"], [{"agent": "antigravity", "session": "3e3e5f18", "turn": "done"}])
+            self.assertEqual([line["conversation"] for line in kept["log"]], ["9aacde14"])
+            self.assertNotIn("the parent's words", json.dumps(kept))
+
+    def test_a_pane_the_hooks_kept_nothing_of_keeps_no_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(hook_records.pane_record(runtime(Path(root)), "hW:p2"))

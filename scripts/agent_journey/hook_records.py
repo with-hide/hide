@@ -21,6 +21,7 @@ rules 4 and 10).
 import hashlib
 import json
 from pathlib import Path
+import re
 
 # `hide_agent_hooks::route::APP_INSTALL`: the desktop package's installation,
 # whose panes keep their records in the folder itself, with no mark.
@@ -154,3 +155,59 @@ def identity_cause(runtime, pane, install=None):
     if pane and failure.get("pane_id") not in ("", pane):
         return f"no_hook_outcome: the hook's last record names pane {failure.get('pane_id')}, not {pane}"
     return named
+
+
+# `hide_agent_hooks::hook_log`: the hooks' bounded log beside the records,
+# one JSON line per refusal, failed report or event kept from the pane.
+LOG_NAME = "spawn-guard.log"
+
+
+def pane_file(records, pane):
+    """`hide_agent_hooks::route::pane_file`: the pane's record under `panes/`."""
+    return records / "panes" / (re.sub(r"[^A-Za-z0-9_-]", "_", pane) + ".json")
+
+
+def pane_record(runtime, pane, install=None):
+    """What the hooks kept of `pane`, for a failed cell to keep beside it, or
+    None when they kept nothing.
+
+    The sessions the pane's record holds, oldest first, by the agent and the
+    session its hook named and the turn it last reported, and the lines the
+    hooks' log holds for the pane. A start that names another agent's session
+    then shows whether the pane's hook named it (with-hide/hide#3124). Only
+    ids, kinds and turns are copied: no prompt, task, command or path, which
+    neither the record's other fields nor the log are read for.
+    """
+    if not pane:
+        return None
+    records = folder(runtime, install)
+    kept = {}
+    try:
+        written = json.loads(pane_file(records, pane).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        written = None
+    except (OSError, ValueError) as error:
+        kept["record_error"] = f"the pane's record could not be read back: {error}"
+        written = None
+    if isinstance(written, dict):
+        sessions = written.get("sessions") if isinstance(written.get("sessions"), list) else [written]
+        kept["sessions"] = [{key: session.get(key) for key in ("agent", "session", "turn")}
+                            for session in sessions if isinstance(session, dict)]
+    try:
+        lines = (records / LOG_NAME).read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        lines = []
+    except OSError as error:
+        kept["log_error"] = f"the hooks' log could not be read: {error}"
+        lines = []
+    logged = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("pane") == pane:
+            logged.append({key: value for key, value in entry.items() if isinstance(value, (str, int, bool))})
+    if logged:
+        kept["log"] = logged
+    return {"pane": pane, **kept} if kept else None

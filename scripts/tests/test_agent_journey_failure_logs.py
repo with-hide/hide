@@ -79,7 +79,7 @@ class FailedCell(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.run_dir)
         self.hided = Hided(self, self.run_dir)
         self.screen = MACOS + "/project $ claude\n"
-        runtime = SimpleNamespace(run=self.run_dir, home=self.run_dir, owner=SimpleNamespace(cancelled=threading.Event()))
+        runtime = SimpleNamespace(run=self.run_dir, home=self.run_dir, state=self.run_dir / "state", owner=SimpleNamespace(cancelled=threading.Event()))
         controller = SimpleNamespace(read_pane=lambda pane, lines=200: self.screen)
         self.table = {"claude": {name: cells.cell(cells.PENDING, "") for name in cells.CELLS}}
         self.record = {"id": "claude"}
