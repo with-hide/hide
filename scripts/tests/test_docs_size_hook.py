@@ -113,6 +113,14 @@ class DocsSizeHookTest(unittest.TestCase):
                 self.assertEqual(self.call("Write", {"file_path": str(path), "content": big}).returncode, 0)
         self.assertEqual(self.edit(guide, "not in the file", big).returncode, 0, "an edit it cannot size")
 
+    def test_a_piece_its_split_table_marks_over_cap_passes_and_its_neighbour_does_not(self):
+        table = {"source": "docs/GUIDE.md", "folder": "docs/guide",
+                 "pieces": [{"name": "ticks", "over_cap": True}, {"name": "rules"}]}
+        self.write_file("scripts/split-tables/guide.json", json.dumps(table))
+        big = "x" * (LIMIT + 1)
+        self.assertEqual(self.call("Write", {"file_path": str(self.repo / "docs/guide/ticks.md"), "content": big}).returncode, 0)
+        self.assertEqual(self.call("Write", {"file_path": str(self.repo / "docs/guide/rules.md"), "content": big}).returncode, 2)
+
     def test_a_worktree_without_the_check_passes(self):
         (self.repo / "scripts" / "check-docs.py").unlink()
         self.assertEqual(self.call("Write", {"file_path": str(self.repo / "docs/NEW.md"),

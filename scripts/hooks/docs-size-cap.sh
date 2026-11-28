@@ -3,9 +3,10 @@
 # a Markdown file of this repository over the docs cap, and larger than it is
 # now, is refused before it lands, with the reason returned to the agent.
 #
-# The cap and the exception list are LIMIT and EXCEPTIONS in
-# scripts/check-docs.py of the worktree the file is in, which CI runs as the
-# final gate. A file on the list, an edit that does not grow the file, a file
+# The cap and the files allowed over it are LIMIT and excepted() in
+# scripts/check-docs.py of the worktree the file is in (EXCEPTIONS and the
+# pieces a split table marks over_cap), which CI runs as the final gate. An
+# allowed file, an edit that does not grow the file, a file
 # git ignores, a file outside this repository, and an edit the hook cannot
 # size (its old text is not in the file) pass. A Codex or OpenCode patch is
 # sized from its hunk lines.
@@ -137,7 +138,7 @@ def patch_sizes(patch, cwd):
     return out
 
 def rules(top, cache={}):
-    """LIMIT and EXCEPTIONS of the worktree check, or None when it has none."""
+    """LIMIT and the files allowed over it of the worktree check, or None when it has none."""
     if top not in cache:
         script = os.path.join(top, "scripts", "check-docs.py")
         cache[top] = None
@@ -145,7 +146,7 @@ def rules(top, cache={}):
             spec = importlib.util.spec_from_file_location("check_docs", script)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            cache[top] = (module.LIMIT, module.EXCEPTIONS, module.TEMPLATE)
+            cache[top] = (module.LIMIT, module.excepted(top), module.TEMPLATE)
     return cache[top]
 
 def verdict():

@@ -13,12 +13,21 @@ checkout's working tree:
 - the source file as the table of contents: its title and introduction, a
   `| Piece | Code |` table, then every heading the file had, with its name,
   level and anchor, each pointing at the piece that holds it;
-- scripts/herdr-names-allowlist.json, the source's entry replaced by one
-  entry per written file that names Herdr, with its count.
+- scripts/check-docs.py without the source's EXCEPTIONS line, the blank lines
+  around it kept, so another split removing a neighbouring entry still merges;
+- scripts/herdr-names-allowlist.json only when the split itself changes the
+  document's count (the table of contents repeats a heading, a title or a Code
+  path that names Herdr, or the table names it): the source's entry, which
+  counts the table of contents, its pieces and the table together, gets the
+  new count on its own line.
 
-The table is JSON: {"source": "docs/X.md", "folder": "docs/x", "pieces":
-[{"name": "<file stem>", "title": "<title>", "code": ["<path>", ...],
-"sections": ["<heading text>", ...]}, ...]}. A placed heading takes every
+The table is JSON, kept as scripts/split-tables/<folder>.json, where
+scripts/check-docs.py learns the split from: {"source": "docs/X.md", "folder":
+"docs/x", "pieces": [{"name": "<file stem>", "title": "<title>", "code":
+["<path>", ...], "sections": ["<heading text>", ...]}, ...]}. A piece that is
+one section with no subheading and still over the cap takes `"over_cap":
+true`. A split adds its table and edits no line another split edits. A placed
+heading takes every
 deeper heading after it up to the next heading of its level or higher; the
 title and the text before the first placed heading stay in the table of
 contents.
@@ -49,6 +58,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ALLOWLIST = 'scripts/herdr-names-allowlist.json'
+CHECK_DOCS = 'scripts/check-docs.py'
+NAMES_CHECK = 'scripts/check-herdr-names.py'
 TOC_MARKER = 'is kept as pieces under'
 LINK = re.compile(r'\]\(([^)\s]+)\)')
 CODE_SPAN = re.compile(r'(``.+?``|`[^`]*`)')
@@ -175,48 +186,35 @@ def code_line(paths, checkout):
 
 
 def herdr_counter(checkout):
-    module = load('check_herdr_names', checkout / 'scripts' / 'check-herdr-names.py')
+    module = load('check_herdr_names', checkout / NAMES_CHECK)
     return lambda text: module.names_in(text)[0]
 
 
-def allowlist_entries(text):
-    """The allowlist's lines, the span of its "files" entries, and the entries."""
-    lines = text.split('\n')
-    entry = re.compile(r'^    "([^"]+)": \{"max": (\d+), "reason": "([^"]+)"\},?$')
-    start = next(i for i, line in enumerate(lines) if line.strip() == '"files": {')
-    end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() in ('}', '},'))
-    files = {}
-    for line in lines[start + 1:end]:
-        match = entry.match(line)
-        if not match:
-            raise Refused(f'{ALLOWLIST}: unexpected line {line!r}')
-        files[match.group(1)] = (int(match.group(2)), match.group(3))
-    return lines, start, end, files
-
-
-def allowlist_update(checkout, commit, source, replaced, outputs):
-    """The allowlist's new text: the entries of the source and of the files the split replaces,
-    then one entry per output that names Herdr, with its count. The source's entry comes from
-    the allowlist at the source's commit, so a rerun after an earlier split of the same source
-    finds it."""
-    lines, start, end, files = allowlist_entries((checkout / ALLOWLIST).read_text(encoding='utf-8'))
-    old = allowlist_entries(git(checkout, 'show', f'{commit}:{ALLOWLIST}'))[3].get(source)
-    for name in {source, *replaced, *outputs}:
-        files.pop(name, None)
+def allowlist_update(checkout, source, outputs, table_text):
+    """The allowlist's new text, or None when it stays, and the count: the source's one entry
+    counts the outputs and the split table together."""
+    text = (checkout / ALLOWLIST).read_text(encoding='utf-8')
+    entry = re.compile(rf'^(    "{re.escape(source)}": {{"max": )(\d+)(, "reason": "[^"]+"}},?)$', re.MULTILINE)
+    found = entry.search(text)
     count = herdr_counter(checkout)
-    before = old[0] if old else 0
-    after = 0
-    for name, text in outputs.items():
-        names = count(text)
-        after += names
-        if names:
-            if old is None:
-                raise Refused(f'{name} would name Herdr {names} times, and {source} has no allowlist entry')
-            files[name] = (names, old[1])
-    body = [f'    "{name}": {{"max": {files[name][0]}, "reason": "{files[name][1]}"}},' for name in sorted(files)]
-    if body:
-        body[-1] = body[-1].rstrip(',')
-    return '\n'.join(lines[:start + 1] + body + lines[end:]), before, after
+    after = sum(count(output) for output in outputs.values()) + count(table_text)
+    if found is None:
+        if after:
+            raise Refused(f'the split would name Herdr {after} times, and {source} has no allowlist entry')
+        return None, after
+    if int(found.group(2)) == after:
+        return None, after
+    return text[:found.start()] + f'{found.group(1)}{after}{found.group(3)}' + text[found.end():], after
+
+
+def exceptions_update(checkout, source):
+    """scripts/check-docs.py without the source's EXCEPTIONS line, or None when it has none."""
+    path = checkout / CHECK_DOCS
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding='utf-8')
+    line = f"    '{source}',\n"
+    return text.replace(line, '', 1) if line in text else None
 
 
 def owned(checkout, folder, source_name, up):
@@ -233,9 +231,10 @@ def owned(checkout, folder, source_name, up):
     return pieces
 
 
-def split(checkout, ref, table):
+def split(checkout, ref, table, table_text=None):
     """The files to write ({path: text}), the old pieces to delete, and a report; raises
-    Refused before anything is written."""
+    Refused before anything is written. `table_text` is the table file as written, which
+    the Herdr names count with the document; the table's JSON when not given."""
     source, folder, pieces = table['source'], table['folder'], table['pieces']
     source_dir = os.path.dirname(source)
     rel = os.path.relpath(folder, source_dir).replace(os.sep, '/')
@@ -346,19 +345,27 @@ def split(checkout, ref, table):
                 raise Refused(f'{name} links {target}, which no heading in {goal} answers')
 
     stale = [name for name in existing if name not in outputs]
-    allowlist, herdr_before, herdr_after = allowlist_update(checkout, commit, source, existing, outputs)
+    allowlist, herdr_after = allowlist_update(
+        checkout, source, outputs, json.dumps(table, ensure_ascii=False) if table_text is None else table_text)
+    exceptions = exceptions_update(checkout, source)
     report = [
         f'split-doc: {source} at {commit[:10]} ({len(text.encode())} bytes, {len(lines)} lines) '
         f'-> {len(pieces)} pieces and the table of contents',
         f'split-doc: {changed} moved lines differ from the source, only in heading level or link target',
-        f'split-doc: Herdr names {herdr_before} in {source} -> {herdr_after} across the outputs',
+        f'split-doc: Herdr names {herdr_counter(checkout)(text)} in {source} -> {herdr_after} across the outputs and the table'
+        + (f'; {ALLOWLIST} counts {herdr_after} for it' if allowlist else ''),
     ]
+    marked = {f'{folder}/{file_of[piece["name"]]}' for piece in pieces if piece.get('over_cap')}
     for name in sorted(outputs):
         size = len(outputs[name].encode())
-        if size > DOCS.LIMIT:
-            report.append(f'split-doc: over {DOCS.LIMIT // 1024} KB: {name} ({size // 1024} KB); '
-                          f'list it in EXCEPTIONS or split it further')
-    outputs[ALLOWLIST] = allowlist
+        if size > DOCS.LIMIT and name not in marked:
+            report.append(f'split-doc: over {DOCS.LIMIT // 1024} KB: {name} ({size // 1024} KB); split it further, '
+                          f'or mark its table entry "over_cap": true when it is one section with no subheading')
+    if exceptions:
+        outputs[CHECK_DOCS] = exceptions
+        report.append(f'split-doc: removed {source} from EXCEPTIONS in {CHECK_DOCS}')
+    if allowlist:
+        outputs[ALLOWLIST] = allowlist
     return outputs, stale, report
 
 
@@ -369,9 +376,10 @@ def main():
     parser.add_argument('--checkout', default=str(ROOT))
     args = parser.parse_args()
     checkout = Path(args.checkout).resolve()
-    table = json.loads(Path(args.table).read_text(encoding='utf-8'))
+    table_text = Path(args.table).read_text(encoding='utf-8')
+    table = json.loads(table_text)
     try:
-        outputs, stale, report = split(checkout, args.source_ref, table)
+        outputs, stale, report = split(checkout, args.source_ref, table, table_text)
     except Refused as refused:
         sys.exit(f'split-doc: {refused}')
     (checkout / table['folder']).mkdir(parents=True, exist_ok=True)

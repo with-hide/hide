@@ -38,6 +38,7 @@
     {
       "name": "resident-ticks",
       "title": "Resident tick inventory",
+      "over_cap": true,
       "code": [
         "hided/src/watch.rs",
         "hided/src/login_item.rs",

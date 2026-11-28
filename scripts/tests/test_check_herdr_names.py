@@ -216,11 +216,79 @@ class ReadingComesFromTheIndex(unittest.TestCase):
         self.assertIn('not a git repository', problems[0].lower())
 
 
+class ASplitDocumentIsCountedWithItsPieces(unittest.TestCase):
+    """A split document keeps one entry, which counts its table of contents, its pieces and its
+    split table together, so the ratchet holds exactly as it held the one file."""
+
+    FILES = {'docs/guide/a.md': 'docs/GUIDE.md', 'docs/guide/b.md': 'docs/GUIDE.md',
+             'scripts/split-tables/guide.json': 'docs/GUIDE.md'}
+    TEXTS = {'docs/GUIDE.md': 'toc\n', 'docs/guide/a.md': 'Herdr\nx\nherdr\n', 'docs/guide/b.md': 'herdr\n',
+             'scripts/split-tables/guide.json': '{"sections": ["Herdr"]}'}
+
+    def errors(self, files, texts=None):
+        return CHECK.check(counted(texts or self.TEXTS), allowlist(files), self.FILES)
+
+    def test_the_document_at_its_number_passes(self):
+        self.assertEqual(self.errors({'docs/GUIDE.md': {'max': 4, 'reason': 'import'}}), [])
+
+    def test_a_name_gained_in_any_piece_or_the_table_fails_with_the_file_and_line(self):
+        for path in ('docs/guide/b.md', 'scripts/split-tables/guide.json', 'docs/GUIDE.md'):
+            with self.subTest(path=path):
+                texts = dict(self.TEXTS, **{path: self.TEXTS[path] + '\nHerdr again\n'})
+                errors = self.errors({'docs/GUIDE.md': {'max': 4, 'reason': 'import'}}, texts)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn('docs/GUIDE.md with its pieces and split table: names Herdr 5 times, the list allows 4', errors[0])
+        self.assertIn('docs/guide/a.md:1, docs/guide/a.md:3', self.errors({'docs/GUIDE.md': {'max': 3, 'reason': 'import'}})[0])
+
+    def test_a_name_lost_lowers_the_documents_number(self):
+        errors = self.errors({'docs/GUIDE.md': {'max': 5, 'reason': 'import'}})
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn('Lower its "max" to 4', errors[0])
+
+    def test_an_unlisted_split_document_that_names_herdr_fails(self):
+        errors = self.errors({})
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn('docs/GUIDE.md with its pieces and split table: names Herdr in lines docs/guide/a.md:1', errors[0])
+
+    def test_a_piece_or_a_table_with_an_entry_of_its_own_fails(self):
+        for path in ('docs/guide/a.md', 'scripts/split-tables/guide.json'):
+            with self.subTest(path=path):
+                errors = self.errors({'docs/GUIDE.md': {'max': 4, 'reason': 'import'}, path: {'max': 2, 'reason': 'import'}})
+                self.assertEqual(errors, [f'{CHECK.ALLOWLIST}: {path} is counted with the split document docs/GUIDE.md; '
+                                          'remove its entry'])
+
+    def test_the_split_files_are_read_from_the_tables_in_the_index_only(self):
+        table = json.dumps({'source': 'docs/GUIDE.md', 'folder': 'docs/guide', 'pieces': [{'name': 'a'}, {'name': 'b'}]})
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            tables = root / 'scripts' / 'split-tables'
+            tables.mkdir(parents=True)
+            (tables / 'guide.json').write_text(table)
+            self.assertEqual(CHECK.split_files(root), {}, 'an untracked table groups nothing')
+            subprocess.run(['git', 'add', 'scripts'], cwd=root, check=True)
+            self.assertEqual(CHECK.split_files(root), self.FILES)
+            (tables / 'guide.json').unlink()
+            self.assertEqual(CHECK.split_files(root), self.FILES, 'a table removed only on disk still groups')
+            (tables / 'guide.json').write_text(table.replace('"b"', '"c"'))
+            self.assertEqual(CHECK.split_files(root), self.FILES, 'an unstaged edit changes nothing')
+
+
 class TheTreeAsItIsPasses(unittest.TestCase):
     def test_every_listed_reason_is_defined_and_no_file_is_off_the_list(self):
         results, problems = CHECK.scan_index(ROOT)
-        errors = problems + CHECK.check(results, ALLOWLIST)
+        errors = problems + CHECK.check(results, ALLOWLIST, CHECK.split_files(ROOT))
         self.assertEqual(errors, [], '\n'.join(errors))
+
+    def test_the_entries_of_documents_waiting_to_be_split_are_a_line_apart(self):
+        # Each such split may change its own entry; neighbouring changed lines would conflict.
+        docs_spec = importlib.util.spec_from_file_location('check_docs', ROOT / 'scripts' / 'check-docs.py')
+        docs = importlib.util.module_from_spec(docs_spec)
+        docs_spec.loader.exec_module(docs)
+        lines = (ROOT / 'scripts' / 'herdr-names-allowlist.json').read_text(encoding='utf-8').split('\n')
+        waiting = [i for i, line in enumerate(lines) if line.strip().split('"')[1:2] and line.strip().split('"')[1] in docs.EXCEPTIONS]
+        for before, after in zip(waiting, waiting[1:]):
+            self.assertGreater(after - before, 1, lines[before:after + 1])
 
     def test_the_allowlist_gives_a_reason_to_every_entry(self):
         for path, entry in ALLOWLIST['files'].items():

@@ -190,8 +190,11 @@ A file that still does not fit is split in the same pull request:
   - Index: [FILE.md](../FILE.md)
   ```
 
-- Every Code path exists, the table of contents links every piece, and every piece and anchor it links exists; the pair is registered in `SPLITS` in `scripts/check-docs.py`.
+- Every Code path exists, the table of contents links every piece, and every piece and anchor it links exists; `scripts/check-docs.py` learns the split from its own table, `scripts/split-tables/<folder>.json`, which names every piece in the folder.
+- A piece over 60 KB that is one section with no subheading, so it cannot be split further, takes `"over_cap": true` in its table entry; the check fails the mark once the piece is back within the cap or has a second section.
+- The allowance of retired names ([CONTRIBUTING.md, CI gates](../CONTRIBUTING.md#ci-gates)) stays one entry under the document's own path, counting the table of contents, its pieces and its table together.
 
-`docs/ARCHITECTURE.md` and its decision records under `docs/adr/` are split the same way, with the record's own fields ([adr/0001](adr/0001-record-architecture-decisions.md)).
+`docs/ARCHITECTURE.md` and its decision records under `docs/adr/` are split the same way, with the record's own fields ([adr/0001](adr/0001-record-architecture-decisions.md)); it was not split by the script, so it has no table and is the one entry of `SPLITS` in `scripts/check-docs.py`.
 `scripts/split-doc.py --source-ref origin/main --table scripts/split-tables/<folder>.json` makes the split from a table that places each heading in a piece and names its Code paths; it moves the text unchanged apart from heading levels and link targets, refuses a heading it does not place, a source already split and any lost line or anchor, and is rerun on the newest main right before the split merges.
 The files that were over the cap when it arrived are listed in `EXCEPTIONS` in `scripts/check-docs.py` until each is split; the list only shrinks, and the check fails on an entry whose file is gone or back within the cap.
+So that splits made at the same time merge without a conflict, a split adds its own files and changes only its own lines of the two shared lists: the script removes the source's `EXCEPTIONS` line, and changes its allowlist line only when the split repeats a name (a heading, title or Code path in the table of contents, a piece's header or the table); the entries of documents still over the cap sit one blank line apart in both lists, because git refuses to merge changes to neighbouring lines.
