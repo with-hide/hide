@@ -122,29 +122,38 @@ function Snap([string]$label) {
     'update-diag-gp ' + ($row | ConvertTo-Json -Compress)
   }
 }
-function Reopened { @(Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $app }) }
-Snap 'start'
+function Reopened { Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $app } }
+function Stamp([string]$what) { "update-diag $what at=$((Get-Date).ToString('o'))" }
+function Rows([string]$label, $list) { foreach ($g in @($list)) { 'update-diag-obj ' + ([ordered]@{ label = $label; pid = $g.Id; exited = $g.HasExited; exitTime = $(if ($g.HasExited) { try { $g.ExitTime.ToString('o') } catch { "$_" } } else { $null }); start = $(try { $g.StartTime.ToString('o') } catch { "$_" }) } | ConvertTo-Json -Compress) } }
+# The cleanup's own commands, in its order and with nothing slow between
+# them; what they saw is printed after the decision.
+Stamp 'begin'
 Get-Process -Name $setup -ErrorAction SilentlyContinue | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
 if (Get-Process -Name $setup -ErrorAction SilentlyContinue) { Snap 'installer-left'; throw 'the installer is still running' }
-Snap 'installer-ended'
-$victims = Reopened
-"update-diag stopping $($victims.Count): $(($victims | ForEach-Object { $_.Id }) -join ',')"
+$t1 = (Get-Date).ToString('o')
+$victims = @(Reopened)
 $victims | Stop-Process -Force -ErrorAction SilentlyContinue -ErrorVariable stopErrors
+$t2 = (Get-Date).ToString('o')
+$waited = @(Reopened)
+$waited | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue -ErrorVariable waitErrors
+$t3 = (Get-Date).ToString('o')
+$left = @(Reopened)
+$t4 = (Get-Date).ToString('o')
+Rows 'left-now' $left
+"update-diag times installer-ended=$t1 stopped=$t2 waited=$t3 checked=$t4"
+"update-diag stopped $($victims.Count): $(($victims | ForEach-Object { $_.Id }) -join ',')"
 foreach ($e in $stopErrors) { "update-diag stop-error $e" }
-Snap 'stopped'
-$deadline = (Get-Date).AddSeconds(10)
-$i = 0
-while ((Reopened).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500; $i++; Snap "wait-$i" }
-if ((Reopened).Count -gt 0) {
-  Snap 'throw'
-  foreach ($p in Reopened) { "update-diag waitprocess $($p.Id)"; $p | Wait-Process -Timeout 3 -ErrorAction SilentlyContinue -ErrorVariable waitErrors; foreach ($e in $waitErrors) { "update-diag wait-error $e" } }
-  Snap 'after-throw-wait'
-  $failedEnd = $true
-} else { Snap 'ended' }
+"update-diag waited-on $($waited.Count): $(($waited | ForEach-Object { $_.Id }) -join ',')"
+foreach ($e in $waitErrors) { "update-diag wait-error $e" }
+"update-diag left $($left.Count): $(($left | ForEach-Object { $_.Id }) -join ',')"
+Rows 'victim' $victims
+Rows 'waited' $waited
+Rows 'left' $left
+Snap 'after-check'
 # Whether an app appears later, after the check a passing run ends on.
-for ($j = 1; $j -le 30; $j++) { Start-Sleep -Seconds 1; Snap "later-$j" }
-foreach ($p in Reopened) { "update-diag later-stop $($p.Id)"; $p | Stop-Process -Force -ErrorAction SilentlyContinue }
-if ($failedEnd) { throw 'the reopened app is still running' }
+for ($j = 1; $j -le 20; $j++) { Start-Sleep -Seconds 1; Snap "later-$j" }
+foreach ($p in @(Reopened)) { "update-diag later-stop $($p.Id)"; $p | Stop-Process -Force -ErrorAction SilentlyContinue }
+if ($left.Count -gt 0) { throw 'the reopened app is still running' }
 `;
     execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit", env: { ...process.env, HIDE_E2E_REOPENED_APP: app, HIDE_E2E_REOPENED_SETUP: path.parse(setup).name } });
   } else {
