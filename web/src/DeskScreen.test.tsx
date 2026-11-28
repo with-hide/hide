@@ -1268,7 +1268,7 @@ describe("Desk's room", () => {
     expect(sent("pane_ask")).toHaveLength(asks + 1);
   });
 
-  // Review round 1 F1 (#3113): a session whose sleep closes its pane (Pi, OpenCode, omp) also gets the record the core
+  // Review round 1 F1: a session whose sleep closes its pane (Pi, OpenCode, omp) also gets the record the core
   // keeps of a gone pane; asleep, it stays a sleeping session to wake beside Desk, not an ended one to resume.
   it.each(["pi", "opencode", "omp"])("keeps a %s session whose sleep closed its pane asleep beside Desk when its record arrives", async (kind) => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
