@@ -12,21 +12,45 @@
 // again. Each new connection hears it once, for the daemon holds nothing of
 // a connection it has not met.
 
+import { ownPaneShownThere } from "./computerWork";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
 /** What a window shows: this machine's own screen, or another computer's. */
 export type WindowScreen = "own" | "computer";
 
-/** The screen this window shows now. */
-export function windowScreen(): WindowScreen {
-  return useUiStore.getState().remoteScreen === null ? "own" : "computer";
+/**
+ * What this window tells: the screen it shows and, on a paired machine's
+ * screen that shows this machine's own work there (PRD device-connect-iroh
+ * D-55), that pane by this core's id, which the core reads as looked at
+ * while it shows.
+ */
+export type WindowScreenReport = { screen: WindowScreen; shown_there?: string };
+
+/** What this window shows now. */
+export function windowScreen(): WindowScreenReport {
+  const ui = useUiStore.getState();
+  if (ui.remoteScreen === null) return { screen: "own" };
+  const pane = ownPaneShownThere(useShellStore.getState().rest, ui.remoteScreen, ui.remoteShowing[ui.remoteScreen] ?? null);
+  return pane === null ? { screen: "computer" } : { screen: "computer", shown_there: pane };
 }
 
-/** Calls `tell` now and each time the page's connection is live again, a new connection that has heard nothing. */
-export function installWindowScreen(tell: () => void): () => void {
+/** Whether two reports say the same. */
+export function sameWindowScreen(a: WindowScreenReport, b: WindowScreenReport): boolean {
+  return a.screen === b.screen && a.shown_there === b.shown_there;
+}
+
+/**
+ * Calls `tell` now and each time the page's connection is live again, a new
+ * connection that has heard nothing, and `changed` when a snapshot arrives
+ * while another computer's screen shows, since which of this machine's
+ * panes that screen shows is read from the snapshot (the caller tells only
+ * a report that differs).
+ */
+export function installWindowScreen(tell: () => void, changed: () => void): () => void {
   const unsubscribe = useShellStore.subscribe((state, previous) => {
     if (state.connection !== previous.connection && state.connection === "live") tell();
+    else if (state.rest !== previous.rest && useUiStore.getState().remoteScreen !== null) changed();
   });
   tell();
   return unsubscribe;

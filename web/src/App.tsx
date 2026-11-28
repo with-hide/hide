@@ -39,14 +39,14 @@ import { ShortcutSheet } from "./ShortcutSheet";
 import { Sidebar } from "./sidebar";
 import { RemoteStage } from "./RemoteStage";
 import { TitleRow } from "./TitleRow";
-import { readEditorAvailability } from "./host";
+import { hostBridge, readEditorAvailability } from "./host";
 import { RegionFailed, RenderBoundary, ShellFailed, SidebarFailed, TitleRowFailed } from "./RenderBoundary";
 import { focusedRemoteDevice, frontCheckout } from "./snapshot";
 import { OPEN_ANSWER_TIMEOUT_MS, openingProgress, startupScreen, waitingForSavedWorkspace } from "./navigation";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { useShellStore } from "./store";
 import { remoteBridge } from "./remoteView";
-import { takeComputerWork } from "./computerWork";
+import { shownGuestPane, takeComputerWork } from "./computerWork";
 import { takeProgramCopy } from "./clipboard";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
@@ -90,6 +90,30 @@ export function App() {
       note: (message) => useShellStore.getState().noteDiagnostic(message),
     });
   }, [actions]);
+  // Another computer's view tells the window that shows it which pane of another machine's work it shows (D-55),
+  // and a window hears it from each screen it shows, so its own work shown there counts as looked at.
+  useEffect(() => {
+    const bridge = remoteBridge();
+    const showing = bridge?.showing;
+    if (showing) {
+      let told: string | null = null;
+      const tell = () => {
+        const shown = shownGuestPane(useShellStore.getState().rest, useUiStore.getState().screen);
+        const key = JSON.stringify(shown);
+        if (key === told) return;
+        told = key;
+        showing(shown);
+      };
+      tell();
+      const unsubscribeRest = useShellStore.subscribe((state, previous) => state.rest !== previous.rest && tell());
+      const unsubscribeScreen = useUiStore.subscribe((state, previous) => state.screen !== previous.screen && tell());
+      return () => {
+        unsubscribeRest();
+        unsubscribeScreen();
+      };
+    }
+    return hostBridge()?.remoteScreens?.onShowing?.(({ device, shown }) => actions.noteRemoteShowing(device, shown));
+  }, [actions]);
   // Open in VS Code is offered only where the desktop app found it (D-14).
   useEffect(() => readEditorAvailability(), []);
 
@@ -111,7 +135,7 @@ export function App() {
     const keyboard = installKeyboard(actions);
     // Which machine's screen this window shows, told to each new connection;
     // an action that changes it tells it after its own events.
-    const windowScreen = installWindowScreen(() => actions.noteWindowScreen());
+    const windowScreen = installWindowScreen(() => actions.noteWindowScreen(), () => actions.followWindowScreen());
     if (probeEnabled()) {
       installProbe(
         () => terminalFor(useShellStore.getState().focusedPaneId),

@@ -3176,15 +3176,33 @@ fn handle_client_text(
         // and a window that leaves without saying so lets go with its
         // connection.
         Some("window_screen") => {
-            let screen = event
-                .get("payload")
+            let payload = event.get("payload");
+            let screen = payload
                 .and_then(|payload| payload.get("screen"))
                 .and_then(Value::as_str)
                 .and_then(crate::demand::WindowScreen::parse)
                 .ok_or_else(|| "window_screen.screen must be own or computer".to_owned())?;
+            // The pane of this machine's work the window's paired screen shows (D-55), by the core's pane id.
+            let shown_there = match payload.and_then(|payload| payload.get("shown_there")) {
+                None | Some(Value::Null) => None,
+                Some(Value::String(pane))
+                    if !pane.is_empty() && pane.len() <= MAX_SHOWN_PANE_BYTES =>
+                {
+                    Some(pane.clone())
+                }
+                Some(_) => {
+                    return Err(format!(
+                        "window_screen.shown_there must be a pane id of at most {MAX_SHOWN_PANE_BYTES} bytes"
+                    ));
+                }
+            };
+            let report = crate::demand::ScreenReport {
+                screen,
+                shown_there,
+            };
             state
                 .window_screen_demand
-                .set(connection, Some(screen), |now| {
+                .set(connection, Some(report), |now| {
                     dispatch_window_screen(&state.core, connection, now)
                 });
             return Ok(ClientAction::Replies(Vec::new()));
@@ -3899,20 +3917,25 @@ fn dispatch_window_focus(
     }
 }
 
+/// The longest pane id a window's report names as shown on a paired screen.
+const MAX_SHOWN_PANE_BYTES: usize = 512;
+
 /// Tells the core which machine's screen this machine's windows show
-/// (`window_screen`). Runs under the screen demand's lock, so it only logs
-/// and hands the event to the core's channel.
-fn dispatch_window_screen(core: &CoreHandle, connection: u64, screen: crate::demand::WindowScreen) {
+/// (`window_screen`), and which of this machine's panes their paired screens
+/// show. Runs under the screen demand's lock, so it only logs and hands the
+/// event to the core's channel.
+fn dispatch_window_screen(core: &CoreHandle, connection: u64, now: &crate::demand::ScreenSum) {
     hide_core::diagnostic!(json!({
         "component": "hided",
         "kind": "window_screen.observation",
         "connection": connection,
-        "screen": screen.as_str(),
+        "screen": now.screen.as_str(),
+        "shown_there": now.shown_there.len(),
     }));
     let event = json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "window_screen",
-        "payload": {"screen": screen.as_str()},
+        "payload": {"screen": now.screen.as_str(), "shown_there": now.shown_there},
     });
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
         hide_core::diagnostic!(json!({

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handedFailure, SENT_CAP, startWork, takeComputerWork } from "./computerWork";
-import { TAKE_WITHIN_MS, type RemoteWork, type RemoteWorkResult } from "./remoteView";
+import { followShow, handedFailure, ownWorkThere, SENT_CAP, shownGuestPane, startWork, takeComputerWork } from "./computerWork";
+import { SHOW_ANSWER_MS, TAKE_WITHIN_MS, type RemoteWork, type RemoteWorkResult } from "./remoteView";
 import type { SnapshotRest, Workspace } from "./snapshot";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import type { StartTarget } from "./startTargets";
@@ -29,7 +29,7 @@ function page(initial: SnapshotRest | null) {
   let live = true;
   let open = true;
   const listeners = new Set<() => void>();
-  const actions = { openListedAgent: vi.fn(), startAgent: vi.fn(), createWorktree: vi.fn(), createWorkspace: vi.fn() };
+  const actions = { openListedAgent: vi.fn(), openGuestPane: vi.fn(), startAgent: vi.fn(), createWorktree: vi.fn(), createWorkspace: vi.fn() };
   const results: RemoteWorkResult[] = [];
   const note = vi.fn();
   const stop = takeComputerWork(
@@ -317,5 +317,128 @@ describe("a start the panel hands to another computer", () => {
     expect(handedFailure({ request: "r", outcome: "not_added", kind: "workspace.create_refused" }, "mini")).toEqual({ key: "startPanel.handOff.notAdded", values: { device: "mini" }, code: "workspace.create_refused" });
     expect(handedFailure({ request: "r", outcome: "no_answer" }, "mini")).toEqual({ key: "shell.startTimeout" });
     expect(handedFailure({ request: "r", outcome: "agent_failed", reason: null, line: "boom" }, "mini")).toMatchObject({ line: "boom" });
+  });
+});
+
+// PRD device-connect-iroh D-55: the asking computer's own work that runs here opens in this screen's
+// guest pane, and the asking window hears whether it did, so one that did not opens it in its own tile.
+describe("the asking computer's own work that runs here", () => {
+  const GUEST = "guest:macbook:pane:w1:p3";
+  const withGuest = (panes: string[]) => {
+    const rest = snapshot([]);
+    (rest.navigator as { guest_panes?: unknown }).guest_panes = [{ device_id: "macbook", key: "a".repeat(64), panes: panes.map((id) => ({ id, pane: id.split(":pane:")[1], since_unix_ms: 0 })) }];
+    return rest;
+  };
+
+  it("opens in the guest pane screen and answers shown", () => {
+    const view = page(withGuest([GUEST]));
+    view.ask({ op: "show", pane: GUEST, request: "s-1" });
+    expect(view.actions.openGuestPane).toHaveBeenCalledWith(GUEST);
+    expect(view.actions.openListedAgent).not.toHaveBeenCalled();
+    expect(view.results).toEqual([{ request: "s-1", outcome: "shown" }]);
+  });
+
+  it("opens nothing and answers not_listed for a pane this computer does not list", () => {
+    const view = page(withGuest(["guest:macbook:pane:w1:p9"]));
+    view.ask({ op: "show", pane: GUEST, request: "s-1" });
+    expect(view.actions.openGuestPane).not.toHaveBeenCalled();
+    expect(view.actions.openListedAgent).not.toHaveBeenCalled();
+    expect(view.results).toEqual([{ request: "s-1", outcome: "not_listed" }]);
+  });
+
+  it("answers late a show it held past its wait or that a later ask replaced", () => {
+    const view = page(null);
+    view.ask({ op: "show", pane: GUEST, request: "s-1" });
+    view.ask({ op: "show", pane: GUEST, request: "s-2" });
+    expect(view.results).toEqual([{ request: "s-1", outcome: "late" }]);
+    vi.advanceTimersByTime(TAKE_WITHIN_MS);
+    expect(view.results).toEqual([{ request: "s-1", outcome: "late" }, { request: "s-2", outcome: "late" }]);
+    expect(view.actions.openGuestPane).not.toHaveBeenCalled();
+  });
+
+  it("still shows this computer's own work asked without a request as before", () => {
+    const view = page(withGuest([GUEST]));
+    view.ask({ op: "show", pane: "w1:p2" });
+    expect(view.actions.openListedAgent).toHaveBeenCalledWith("w1:p2");
+    expect(view.results).toEqual([]);
+  });
+});
+
+describe("which pane of another machine's work this page shows", () => {
+  const rest = { navigator: { guest_panes: [{ device_id: "macbook", key: "a".repeat(64), panes: [{ id: "guest:macbook:pane:w1:p3", pane: "w1:p3", since_unix_ms: 0 }] }] } } as unknown as SnapshotRest;
+
+  it("names the guest pane page's pane by its machine and its node's id, and none on any other page", () => {
+    expect(shownGuestPane(rest, { kind: "guest", paneId: "guest:macbook:pane:w1:p3" })).toEqual({ device: "macbook", pane: "w1:p3" });
+    expect(shownGuestPane(rest, { kind: "guest", paneId: "guest:macbook:pane:w9:p9" })).toBeNull();
+    expect(shownGuestPane(rest, { kind: "workspace" })).toBeNull();
+    expect(shownGuestPane(null, { kind: "guest", paneId: "guest:macbook:pane:w1:p3" })).toBeNull();
+  });
+});
+
+describe("which of this computer's panes run on a paired machine", () => {
+  const KEY = "b".repeat(64);
+  const rest = (devices: unknown[], agents: unknown[]) =>
+    ({
+      navigator: { devices: [{ id: "macbook", kind: "local" }, ...devices], workspaces: [] },
+      status: { remote: [{ target_id: "mini", state: "connected", session: { agents, workspaces: [] } }] },
+    }) as unknown as SnapshotRest;
+  const row = { pane_id: "remote:mini:pane:w1:p3", device_id: "mini", device_pane_id: "w1:p3" };
+
+  it("names a paired machine's pane by the guest address that machine gives it", () => {
+    expect(ownWorkThere(rest([{ id: "mini", kind: "remote", peer_key: KEY }], [row]), row.pane_id)).toEqual({ deviceId: "mini", pane: "guest:macbook:pane:w1:p3" });
+  });
+
+  it("names none for an SSH device's pane, this machine's pane or one it does not list", () => {
+    expect(ownWorkThere(rest([{ id: "mini", kind: "remote", ssh_alias: "mini", peer_key: null }], [row]), row.pane_id)).toBeNull();
+    expect(ownWorkThere(rest([{ id: "mini", kind: "remote", peer_key: KEY }], [row]), "w1:p1")).toBeNull();
+    expect(ownWorkThere(null, row.pane_id)).toBeNull();
+  });
+});
+
+describe("a show handed with a request", () => {
+  const bridge = () => {
+    let listener: ((result: RemoteWorkResult & { device: string }) => void) | null = null;
+    return { remote: { onWorkResult: (next: typeof listener) => ((listener = next), () => (listener = null)) }, answer: (result: RemoteWorkResult) => listener?.({ device: "mini", ...result }), listening: () => listener !== null };
+  };
+
+  it("leaves the pane on that screen once it answers shown", () => {
+    const { remote, answer, listening } = bridge();
+    const notShown = vi.fn();
+    followShow(remote as never, "s-1", notShown);
+    answer({ request: "s-0", outcome: "not_listed" });
+    answer({ request: "s-1", outcome: "shown" });
+    vi.advanceTimersByTime(SHOW_ANSWER_MS);
+    expect(notShown).not.toHaveBeenCalled();
+    expect(listening()).toBe(false);
+  });
+
+  it.each<RemoteWorkResult["outcome"]>(["not_listed", "not_shown", "unconfirmed"])("hands the pane back once on %s", (outcome) => {
+    const { remote, answer } = bridge();
+    const notShown = vi.fn();
+    followShow(remote as never, "s-1", notShown);
+    answer({ request: "s-1", outcome } as RemoteWorkResult);
+    vi.advanceTimersByTime(SHOW_ANSWER_MS);
+    expect(notShown.mock.calls).toEqual([[outcome]]);
+  });
+
+  it("hands the pane back when a page of an older build answers nothing in time", () => {
+    const { remote } = bridge();
+    const notShown = vi.fn();
+    followShow(remote as never, "s-1", notShown);
+    vi.advanceTimersByTime(SHOW_ANSWER_MS - 1);
+    expect(notShown).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(notShown.mock.calls).toEqual([["no_answer"]]);
+  });
+
+  it("follows nothing once a later open stopped it", () => {
+    const { remote, answer, listening } = bridge();
+    const notShown = vi.fn();
+    const stop = followShow(remote as never, "s-1", notShown);
+    stop();
+    answer({ request: "s-1", outcome: "not_listed" });
+    vi.advanceTimersByTime(SHOW_ANSWER_MS);
+    expect(notShown).not.toHaveBeenCalled();
+    expect(listening()).toBe(false);
   });
 });

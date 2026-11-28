@@ -7,7 +7,8 @@
 //! of this machine's focus pane as the operator chose it, the device in front
 //! (whose own focus counts while its window shows that pane's tab), whether
 //! this machine's windows show its own screen, the views other machines show
-//! of this one, and the agents phones have open. The focus and the device in
+//! of this one, the agents phones have open, and this machine's panes a
+//! paired machine's screen shows in a window of this one. The focus and the device in
 //! front count only while the screen they were chosen on shows: this
 //! machine's own screen while a window of it shows it rather than another
 //! computer's, another machine's view only while that machine shows it. One
@@ -25,6 +26,12 @@ use super::*;
 /// whole and the one before stays, so it is a bound on a wrong caller, never
 /// reached by hided.
 const MAX_VIEWING_MACHINES: usize = 32;
+
+/// This machine's panes paired machines' screens can show in its windows at
+/// once: each window shows one screen with one pane in front, and hided
+/// keeps this many at most (`demand::MAX_SHOWN_THERE`). A longer list is
+/// refused whole and the one before stays.
+const MAX_SHOWN_THERE: usize = 16;
 
 /// The screen a window's or a view's event was sent from, as the operator's
 /// look reads it (`Core::dispatch_bytes_from`); a tool's event names none.
@@ -100,6 +107,14 @@ pub(super) struct LookInputs {
     /// or closes an agent's detail or disconnects (`phone_viewing`). Memory
     /// only; a launch starts with no phone looking.
     phones: BTreeSet<String>,
+    /// This machine's panes that a paired machine's screen shows now in a
+    /// window of this machine, by the core's pane id: this machine's work
+    /// that runs on that machine, opened in its tile on the page that reads
+    /// and types into it (PRD device-connect-iroh D-55). Read as a phone's
+    /// look is, and nothing else moves. hided names every one with what the
+    /// windows show (`window_screen`). Memory only; a launch starts with
+    /// none.
+    shown_there: BTreeSet<String>,
     /// The screen the step running now was sent from: a window's or a
     /// view's event being dispatched, or the landing of a press it made
     /// (`Runtime::on_screen`); none otherwise.
@@ -120,6 +135,7 @@ impl LookInputs {
             own_shows: true,
             views: BTreeSet::new(),
             phones: BTreeSet::new(),
+            shown_there: BTreeSet::new(),
             sent_from: None,
             open: 0,
         }
@@ -201,6 +217,10 @@ impl LookInputs {
 
     pub(super) fn phones(&self) -> &BTreeSet<String> {
         &self.phones
+    }
+
+    pub(super) fn shown_there(&self) -> &BTreeSet<String> {
+        &self.shown_there
     }
 
     /// Whether a selection is under way: its values are not the look yet.
@@ -334,19 +354,40 @@ impl Runtime {
     }
 
     /// This machine's windows show `screen` now (`window_screen`), as hided
-    /// sums them. Outside a selection this is one by itself and reads at
-    /// once; answers whether that read moved a row or a View was seen.
-    pub(super) fn set_window_screen(&mut self, screen: WindowScreen) -> bool {
+    /// sums them, and paired machines' screens in them show `shown_there`,
+    /// this machine's own panes. Outside a selection this is one by itself
+    /// and reads at once; answers whether that read moved a row or a View
+    /// was seen.
+    pub(super) fn set_window_screen(
+        &mut self,
+        screen: WindowScreen,
+        shown_there: Vec<String>,
+    ) -> bool {
+        if shown_there.len() > MAX_SHOWN_THERE {
+            self.push_diagnostic(
+                "look.window_screen.refused",
+                format!(
+                    "A window report named {} panes shown on paired machines; at most {MAX_SHOWN_THERE} show at once",
+                    shown_there.len()
+                ),
+            );
+            return false;
+        }
         let own_shows = screen == WindowScreen::Own;
-        if self.look.own_shows == own_shows {
+        let shown_there = shown_there.into_iter().collect::<BTreeSet<_>>();
+        if self.look.own_shows == own_shows && self.look.shown_there == shown_there {
             return false;
         }
         crate::diagnostic!(serde_json::json!({
             "component": "runtime", "kind": "look.window_screen",
             "screen": if own_shows { "own" } else { "computer" },
+            "shown_there": shown_there,
         }));
         let read = self
-            .change_look(|runtime| runtime.look.own_shows = own_shows)
+            .change_look(|runtime| {
+                runtime.look.own_shows = own_shows;
+                runtime.look.shown_there = shown_there;
+            })
             .1;
         // The View in front of the window with the keyboard is seen only
         // while this machine's screen shows (`looked_at_view`).
@@ -396,7 +437,8 @@ impl Runtime {
     /// or tab chosen on this machine, a device brought forward or left, the
     /// tab a device's window shows, a device's own keyboard, this machine's
     /// windows going to another computer's screen or back, a view shown or
-    /// left, a phone. A
+    /// left, a phone, a pane of this machine's a paired machine's screen
+    /// shows. A
     /// device's own keyboard that already rests on a pane sends nothing new,
     /// so the read cannot wait for the device's next session.
     fn follow_operator_look(&mut self) -> bool {

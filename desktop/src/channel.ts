@@ -154,6 +154,8 @@ export const REMOTE_GO_CHANNEL = "hide:remote-go";
 export const REMOTE_SETTINGS_CHANNEL = "hide:remote-settings";
 /** How a start the shell handed to a screen ended, by its request id (main -> renderer). */
 export const REMOTE_WORK_RESULT_CHANNEL = "hide:remote-work-result";
+/** Which pane of another machine's work a screen's page shows now, or none (main -> renderer, D-55). */
+export const REMOTE_SHOWING_CHANNEL = "hide:remote-showing";
 
 /**
  * The remote screen's own bridge, version 1, between its sandboxed page and
@@ -177,6 +179,8 @@ export const REMOTE_VISIBLE_CHANNEL = "hide-remote:visible";
 export const REMOTE_VIEWER_CHANNEL = "hide-remote:viewer";
 export const REMOTE_WORK_CHANNEL = "hide-remote:work";
 export const REMOTE_WORK_DONE_CHANNEL = "hide-remote:work-done";
+/** The pane of another machine's work the page shows now, or none (D-55), which the window that shows it counts as looked at when it is that window's own. */
+export const REMOTE_PAGE_SHOWING_CHANNEL = "hide-remote:showing";
 
 /**
  * The browser displays of that screen (docs/BROWSER_DISPLAYS.md, A page in

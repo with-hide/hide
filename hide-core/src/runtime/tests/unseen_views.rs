@@ -272,14 +272,14 @@ fn a_view_stays_unseen_while_the_window_shows_another_computer() {
     let (_root, runtime) = fixture(false);
     let mut guard = runtime.lock().unwrap();
     keyboard(&mut guard, Some("recipient"));
-    guard.set_window_screen(WindowScreen::Computer);
+    guard.set_window_screen(WindowScreen::Computer, Vec::new());
     let view = open(&mut guard, "recipient", "src/login.ts");
     assert!(unseen(&guard, &view), "opened while another computer shows");
     guard.set_window_focus(None);
     guard.set_window_focus(Some(FocusScreen::Workspace));
     guard.sync_workspace_view();
     assert!(unseen(&guard, &view), "a window naming the Workspace first");
-    assert!(guard.set_window_screen(WindowScreen::Own));
+    assert!(guard.set_window_screen(WindowScreen::Own, Vec::new()));
     assert!(
         !unseen(&guard, &view),
         "seen once this machine's screen shows"
