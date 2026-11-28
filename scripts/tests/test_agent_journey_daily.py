@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -227,22 +228,46 @@ class Runner(unittest.TestCase):
         for private in PRIVATE.split() + ["someone", "Errno"]:
             self.assertNotIn(private, stream.getvalue())
 
-    def test_an_uncaught_failure_names_only_its_kind_on_stderr(self):
-        # launchd keeps the runner's stderr in the account's log.
-        for where in ("runner", "thread"):
-            with self.subTest(where=where):
-                program = ("import sys, threading\n"
-                           "from agent_journey.daily import quiet_failures\n"
-                           "quiet_failures()\n"
-                           f"failure = OSError({PRIVATE!r})\n"
-                           "def fail():\n"
-                           "    raise failure\n"
-                           + ("fail()\n" if where == "runner" else
-                              "thread = threading.Thread(target=fail); thread.start(); thread.join()\n"))
-                done = subprocess.run([sys.executable, "-c", program], cwd=Path(daily.__file__).parents[1],
-                                      capture_output=True, text=True, timeout=60)
-                self.assertEqual(done.stderr, "agent-journey-daily: failed: OSError\n")
-                self.assertEqual(done.returncode, 1 if where == "runner" else 0)
+    ENTRY = Path(daily.__file__).parents[1] / "agent-journey-daily.py"
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS's admin group")
+    def test_an_uncaught_failure_at_the_entry_point_names_only_its_kind(self):
+        # launchd keeps the runner's stderr in the account's log. Setup asked
+        # about an account that does not exist fails in pwd, whose message
+        # names the account.
+        name = PRIVATE.split()[1]
+        done = subprocess.run([sys.executable, str(self.ENTRY), "setup", "--cargo-lock", PRIVATE.split()[0],
+                               "--toolchain-bin", str(self.root), "--rustup-home", str(self.root)],
+                              env={**os.environ, "USER": name}, capture_output=True, text=True, timeout=60)
+        self.assertEqual((done.returncode, done.stdout, done.stderr),
+                         (1, "", "agent-journey-daily: failed: KeyError\n"))
+
+    def test_an_uncaught_failure_in_a_thread_names_only_its_kind(self):
+        program = ("import runpy, sys, threading\n"
+                   "runpy.run_path(sys.argv[1])\n"
+                   f"def fail():\n    raise OSError({PRIVATE!r})\n"
+                   "thread = threading.Thread(target=fail); thread.start(); thread.join()\n"
+                   "fail()\n")
+        done = subprocess.run([sys.executable, "-c", program, str(self.ENTRY)], capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual((done.returncode, done.stderr), (1, "agent-journey-daily: failed: OSError\n" * 2))
+
+    def test_a_step_whose_output_cannot_be_read_fails_by_its_kind(self):
+        # The reader thread's failure is the step's, raised to its caller.
+        class Unreadable(daily.Tail):
+            def read(self, stream):
+                def refused():
+                    raise OSError(PRIVATE)
+                super().read(SimpleNamespace(fileno=refused))
+
+        stream = io.StringIO()
+        with mock.patch.object(daily, "Tail", Unreadable), daily.OwnedProcesses(run_seconds=60) as owner:
+            with self.assertRaises(OSError):
+                daily.step(owner, "probe", [sys.executable, "-c", "pass"], stream, dict(os.environ), 20,
+                           cwd=self.root)
+        self.assertIn("probe: output unreadable: OSError", stream.getvalue())
+        for private in PRIVATE.split():
+            self.assertNotIn(private, stream.getvalue())
 
     GRANDCHILD = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
     PARENT = ("import subprocess, sys, time\n"

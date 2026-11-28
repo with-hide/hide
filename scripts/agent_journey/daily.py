@@ -135,13 +135,18 @@ class Tail:
     """The last `cap` bytes a stream wrote, read to its end."""
 
     def __init__(self, cap):
-        self.cap, self.data = cap, bytearray()
+        self.cap, self.data, self.error = cap, bytearray(), None
 
     def read(self, stream):
-        while chunk := os.read(stream.fileno(), 65536):
-            self.data += chunk
-            if len(self.data) > self.cap:
-                del self.data[:len(self.data) - self.cap]
+        # A failed read is the step's failure, raised by step, not a
+        # thread's traceback on stderr.
+        try:
+            while chunk := os.read(stream.fileno(), 65536):
+                self.data += chunk
+                if len(self.data) > self.cap:
+                    del self.data[:len(self.data) - self.cap]
+        except Exception as error:
+            self.error = error
 
     def text(self):
         return bytes(self.data).decode("utf-8", errors="replace")
@@ -169,16 +174,6 @@ def failure_kinds(error, output):
             kinds.append(match.group(0))
     return kinds[:5]
 
-
-def quiet_failures():
-    """An uncaught failure, in the runner or one of its threads, names only
-    its kind on stderr, which launchd keeps in the account's log."""
-    def report(kind):
-        sys.stderr.write(f"agent-journey-daily: failed: {kind.__name__}\n")
-        sys.stderr.flush()
-
-    sys.excepthook = lambda kind, value, trace: report(kind)
-    threading.excepthook = lambda failure: report(failure.exc_type)
 
 
 def environment(settings, extra=None):
@@ -222,6 +217,9 @@ def step(owner, name, argv, stream, env, seconds, *, cwd=CHECKOUT):
         for kind in failure_kinds(error, tail.text()):
             log(stream, f"{name}: {kind}")
         raise
+    if tail.error is not None:
+        log(stream, f"{name}: output unreadable: {type(tail.error).__name__}")
+        raise tail.error
     log(stream, f"{name}: exit {code}")
     return code, tail
 
@@ -508,7 +506,7 @@ def run(settings):
             record["run"] = f"runner failed: {type(error).__name__}"
             log(stream, record["run"])
         except BaseException as error:
-            # An interrupt still ends the runner, through quiet_failures.
+            # An interrupt still ends the runner; the entry point reports its kind.
             record["run"] = f"runner failed: {type(error).__name__}"
             log(stream, record["run"])
             raise
