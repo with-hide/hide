@@ -3013,9 +3013,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_added_device_that_connects_after_the_deadline_or_a_stop_starts_nothing() {
         let within = Duration::from_secs(2);
+        // The daemon goes on: only the stop cases below end it.
+        let running = Ending::new();
         // It connects as the deadline passes.
         let over = Instant::now() + within;
-        let late = connects(&Ending::new(), over, || async move {
+        let late = connects(&running, over, || async move {
             let state = if Instant::now() >= over {
                 "connected"
             } else {
@@ -3047,7 +3049,7 @@ mod tests {
         assert_eq!(waiting.await.unwrap(), Err("added_not_connected"));
         // A read that never answers ends at the deadline, and at a stop.
         let never = std::future::pending::<Result<String, &'static str>>;
-        let hung = connects(&Ending::new(), Instant::now() + within, never);
+        let hung = connects(&running, Instant::now() + within, never);
         assert_eq!(hung.await, Err("added_not_connected"));
         let shutdown = Ending::new();
         shutdown.end();
@@ -3055,7 +3057,7 @@ mod tests {
         assert_eq!(hung.await, Err("added_not_connected"));
         // Connecting, then connected in time: the switch goes on.
         let mut reads = 0;
-        let connected = connects(&Ending::new(), Instant::now() + within, || {
+        let connected = connects(&running, Instant::now() + within, || {
             reads += 1;
             let state = if reads == 1 {
                 "connecting"
