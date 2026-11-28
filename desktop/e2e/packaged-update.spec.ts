@@ -128,9 +128,10 @@ function Rows([string]$label, $list) { foreach ($g in @($list)) { 'update-diag-o
 # The cleanup's own commands, in its order and with nothing slow between
 # them; what they saw is printed after the decision.
 Stamp 'begin'
-Get-Process -Name $setup -ErrorAction SilentlyContinue | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
-if (Get-Process -Name $setup -ErrorAction SilentlyContinue) { Snap 'installer-left'; throw 'the installer is still running' }
+# Reproduction: the order before #3148, which stopped the app as soon as the
+# new version was recorded, while the installer may still run.
 $t1 = (Get-Date).ToString('o')
+$installerAtStop = @(Get-Process -Name $setup -ErrorAction SilentlyContinue)
 $victims = @(Reopened)
 $victims | Stop-Process -Force -ErrorAction SilentlyContinue -ErrorVariable stopErrors
 $t2 = (Get-Date).ToString('o')
@@ -140,7 +141,8 @@ $t3 = (Get-Date).ToString('o')
 $left = @(Reopened)
 $t4 = (Get-Date).ToString('o')
 Rows 'left-now' $left
-"update-diag times installer-ended=$t1 stopped=$t2 waited=$t3 checked=$t4"
+"update-diag installer-at-stop $($installerAtStop.Count): $(($installerAtStop | ForEach-Object { $_.Id }) -join ',')"
+"update-diag times before-stop=$t1 stopped=$t2 waited=$t3 checked=$t4"
 "update-diag stopped $($victims.Count): $(($victims | ForEach-Object { $_.Id }) -join ',')"
 foreach ($e in $stopErrors) { "update-diag stop-error $e" }
 "update-diag waited-on $($waited.Count): $(($waited | ForEach-Object { $_.Id }) -join ',')"
@@ -150,6 +152,7 @@ Rows 'victim' $victims
 Rows 'waited' $waited
 Rows 'left' $left
 Snap 'after-check'
+foreach ($i in $installerAtStop) { $i.WaitForExit(120000) | Out-Null; "update-diag installer $($i.Id) exited=$($i.HasExited) at=$(try { $i.ExitTime.ToString('o') } catch { "$_" })" }
 # Whether an app appears later, after the check a passing run ends on.
 for ($j = 1; $j -le 20; $j++) { Start-Sleep -Seconds 1; Snap "later-$j" }
 foreach ($p in @(Reopened)) { "update-diag later-stop $($p.Id)"; $p | Stop-Process -Force -ErrorAction SilentlyContinue }
