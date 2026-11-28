@@ -38,31 +38,29 @@ def administrator(name):
 
 
 def dedicated(home=None):
-    """Whether this process runs as the journey account, which exists only
-    on macOS (docs/INSTALL.md: the signed-in journey is macOS only)."""
-    if sys.platform != "darwin":
-        return False
-    import pwd
-    home = Path(home or Path.home())
-    name = pwd.getpwuid(os.getuid()).pw_name
-    return (home / MARKER).is_file() and not administrator(name)
-
-
-def removable(home, path):
-    """Whether the runner may remove `path`: it runs as the journey account,
-    whose own home `home` is and holds the marker, and `path` lies inside
-    that home through no link. Anywhere else an agent's files are a
-    person's work."""
+    """Whether this process runs as the journey account, in its own home that
+    holds the marker: the only account whose logins the journey writes back
+    and whose files the runner removes. It exists only on macOS
+    (docs/INSTALL.md: the signed-in journey is macOS only)."""
     if sys.platform != "darwin":
         return False
     import pwd
     me = pwd.getpwuid(os.getuid())
-    home, path = Path(home), Path(path)
-    if me.pw_name != NAME or home.resolve() != Path(me.pw_dir).resolve() or not dedicated(home):
+    home = Path(home or Path.home())
+    return (me.pw_name == NAME and home.resolve() == Path(me.pw_dir).resolve()
+            and (home / MARKER).is_file() and not administrator(me.pw_name))
+
+
+def removable(home, path):
+    """Whether the runner may remove `path`: it runs as the journey account
+    in `home`, and `path` lies inside that home through no link. Anywhere
+    else an agent's files are a person's work."""
+    if not dedicated(home):
         return False
+    home, path = Path(home).resolve(), Path(path)
     if path.is_symlink():
         return False
-    return path.resolve().is_relative_to(home.resolve()) and path.resolve() != home.resolve()
+    return path.resolve().is_relative_to(home) and path.resolve() != home
 
 
 # The members SQLite keeps beside a database file.

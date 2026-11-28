@@ -268,7 +268,7 @@ def install_clis(owner, stream, env):
     folder = root / "clis" / hashlib.sha256(table).hexdigest()[:16]
     installed = folder / "installed.json"
     if not installed.is_file():
-        shutil.rmtree(folder, ignore_errors=True)
+        remove(folder)
         folder.mkdir(parents=True)
         code, output = step(owner, "install", [sys.executable, "scripts/install-agent-clis.py", "--all",
                                                "--prefix", str(folder)], stream, env, STEP_SECONDS)
@@ -286,12 +286,26 @@ def install_clis(owner, stream, env):
         link.symlink_to(program)
     for other in (root / "clis").iterdir():
         if other != folder:
-            shutil.rmtree(other, ignore_errors=True)
+            remove(other)
     return programs
 
 
 def controller_provider():
     return journey_root() / "controller/claude"
+
+
+def remove(path):
+    """Removes a file or a folder, only inside the journey account's own home
+    (account.removable): every removal of the runner goes through here."""
+    path = Path(path)
+    if not path.exists() and not path.is_symlink():
+        return
+    if not account.removable(account_home(), path):
+        raise RuntimeError("a removal outside the journey account's home")
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def size(path):
@@ -309,7 +323,7 @@ def within_caps(stream):
         folder = CHECKOUT / name if name == "target" else journey_root() / name
         if folder.is_dir() and size(folder) > cap:
             log(stream, f"{name} past its cap: removed")
-            shutil.rmtree(folder)
+            remove(folder)
 
 
 def newest_change(path):
@@ -337,8 +351,7 @@ def ended_sessions(home, now):
 
 def stores_within_cap(stream, home):
     """The agents' stores' size, after dropping ended sessions, oldest first,
-    while the stores are past their cap. Only in the journey account's own
-    home: anywhere else the sessions are a person's work."""
+    while the stores are past their cap (each through `remove`)."""
     total = sum(size(home / name) for name in STORES)
     if total <= STORES_CAP:
         return total
@@ -346,15 +359,10 @@ def stores_within_cap(stream, home):
     for changed, folder, path in ended_sessions(home, time.time()):
         if total <= STORES_CAP:
             break
-        if not account.removable(home, path):
-            raise RuntimeError("agent stores of an account that is not the journey's")
         freed = size(path) if path.is_dir() else path.lstat().st_size
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-            # omp keeps a lock file beside each session.
-            path.with_name(f".{path.name}.lock.os").unlink(missing_ok=True)
+        remove(path)
+        # omp keeps a lock file beside each session.
+        remove(path.with_name(f".{path.name}.lock.os"))
         total -= freed
         dropped += 1
         # Which store and when, never the path: a session's name can carry a folder's.
@@ -483,10 +491,7 @@ def keep_newest(folder, count, cap):
     for index, entry in enumerate(entries):
         total += size(entry) if entry.is_dir() else entry.stat().st_size
         if index >= count or total > cap:
-            if entry.is_dir():
-                shutil.rmtree(entry, ignore_errors=True)
-            else:
-                entry.unlink()
+            remove(entry)
 
 
 def trim(path, cap):

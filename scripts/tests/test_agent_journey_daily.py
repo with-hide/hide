@@ -158,8 +158,9 @@ class Runner(unittest.TestCase):
         for target, name, value in ((daily, "journey_root", mock.Mock(return_value=self.root)),
                                     (daily, "runs_folder", mock.Mock(return_value=self.runs)),
                                     (daily, "account_home", mock.Mock(return_value=self.home)),
+                                    # Stands in for the journey account: this test's own folder.
                                     (daily.account, "removable",
-                                     lambda home, path: home == self.home and self.home in Path(path).parents),
+                                     lambda home, path: home == self.home and self.root in Path(path).parents),
                                     (daily.signal, "signal", mock.Mock())):
             patcher = mock.patch.object(target, name, value)
             patcher.start()
@@ -519,15 +520,25 @@ class Account(unittest.TestCase):
         asked.assert_called_once()
 
 
-    def test_an_administrator_is_never_the_journey_account(self):
+    @unittest.skipIf(os.name == "nt", "no account database to stand in for")
+    def test_only_the_journey_user_in_its_own_marked_home_is_the_journey_account(self):
         with tempfile.TemporaryDirectory() as home, mock.patch.object(account.sys, "platform", "darwin"):
             (Path(home) / account.MARKER).write_text("")
-            with mock.patch.object(account, "administrator", return_value=True):
+            journey = SimpleNamespace(pw_name=account.NAME, pw_dir=home)
+            with mock.patch("pwd.getpwuid", return_value=journey):
+                with mock.patch.object(account, "administrator", return_value=True):
+                    self.assertFalse(account.dedicated(home))
+                with mock.patch.object(account, "administrator", return_value=False):
+                    self.assertTrue(account.dedicated(home))
+                    with tempfile.TemporaryDirectory() as other:
+                        (Path(other) / account.MARKER).write_text("")
+                        self.assertFalse(account.dedicated(other))
+            with mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_name="someone", pw_dir=home)), \
+                    mock.patch.object(account, "administrator", return_value=False):
                 self.assertFalse(account.dedicated(home))
-            with mock.patch.object(account, "administrator", return_value=False):
-                self.assertTrue(account.dedicated(home))
             (Path(home) / account.MARKER).unlink()
-            with mock.patch.object(account, "administrator", return_value=False):
+            with mock.patch("pwd.getpwuid", return_value=journey), \
+                    mock.patch.object(account, "administrator", return_value=False):
                 self.assertFalse(account.dedicated(home))
 
     def test_the_journey_account_exists_only_on_macos(self):
