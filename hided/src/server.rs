@@ -6567,6 +6567,7 @@ mod tests {
         let adds = ScopedRequest::Device(hide_core::device_command::DeviceCommand::Add {
             ssh_alias: "box".into(),
             name: None,
+            host_consent: false,
         });
         assert_eq!(
             admit_command(&desk, &adds).unwrap_err().0,

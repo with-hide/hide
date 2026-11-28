@@ -20,6 +20,12 @@ pub enum DeviceCommand {
         ssh_alias: String,
         /// The name the device is shown under; the alias when absent.
         name: Option<String>,
+        /// The operator's consent to Hide's helper there, which only
+        /// hided's own `add_server` gives, in process: no request carries
+        /// it, so a command from a terminal or a pane adds the device
+        /// without the helper, as the module says.
+        #[serde(skip)]
+        host_consent: bool,
     },
     Remove {
         device_id: String,
@@ -47,9 +53,9 @@ impl DeviceCommand {
     pub fn valid(&self) -> bool {
         match self {
             Self::List => true,
-            Self::Add { ssh_alias, name } => {
-                valid_value(ssh_alias) && name.as_deref().is_none_or(valid_value)
-            }
+            Self::Add {
+                ssh_alias, name, ..
+            } => valid_value(ssh_alias) && name.as_deref().is_none_or(valid_value),
             Self::Remove { device_id } | Self::Retry { device_id } => valid_value(device_id),
             Self::Rename { device_id, name } => {
                 valid_value(device_id) && device_name(name).is_some()

@@ -47,7 +47,7 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "rename" | "look_switch" | "switch";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "rename" | "look_switch" | "switch" | "add_server";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "refused" | "not_running" | "not_reached"; system?: string };
@@ -61,11 +61,16 @@ export type PairingResult = {
   link?: string;
   alias?: string;
   looked?: SshLook;
-  /** With `look_switch` and `switch`: the device asked about, what its machine said, and the login name a Mac said. */
+  /** With `look_ssh`: the system the Host's account runs, and for one with no Hide why none can be started there (hided `pairing_ssh::HostLook`). */
+  system?: string | null;
+  leaves?: string | null;
+  /** With `look_switch` and `switch`: the device asked about, what its machine said, and the login name a Mac said; with `look_ssh`, what a Host that runs Hide said of the same rule. */
   device_id?: string;
   condition?: SwitchCondition;
   user?: string | null;
-  /** With `switch`: how the press ended; `held` names the computer that switched the device first and how many terminals this one runs there. */
+  /** A refused `add_server` whose device was added (over SSH) before the step that failed: its row says why. */
+  added?: boolean;
+  /** With `switch` and `add_server`: how the press ended; `held` names the computer that switched the device first and how many terminals this one runs there. */
   switch?: "done" | "left" | "held" | "install_needed";
   by?: string;
   terminals?: number | null;

@@ -187,7 +187,7 @@
     "example": "hide device list"
   },
   "device add": {
-    "line": "Connects another computer: a link that computer's hide device share printed pairs the two Hides once both screens show the same words, and an SSH Host name from ~/.ssh/config registers a device whose folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices. Only the machine that runs Hide may add one.",
+    "line": "Connects another computer: a link that computer's hide device share printed pairs the two Hides once both screens show the same words. An SSH Host name from ~/.ssh/config is connected as a server, as Add device does: a machine that runs Hide is paired, one that runs none and can take one gets Hide installed and started there, and any other is added over SSH with the reason; --ssh adds over SSH alone. From a Hide pane it registers a device whose folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices. Only the machine that runs Hide may add one.",
     "example": "hide device add mini --name 'Mac mini'"
   },
   "device remove": {
