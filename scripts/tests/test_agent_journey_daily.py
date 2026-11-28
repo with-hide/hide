@@ -95,7 +95,10 @@ class Summary(unittest.TestCase):
                            ("Invalid API key · Please run /login", "login needed"),
                            ("Your refresh token was already used. Please log out and sign in again.", "login needed"),
                            ("401 Unauthorized", "login needed"),
+                           ("Error: Not logged in. Run grok login.", "login needed"),
                            ("A new version is required; run npm i -g to update", "update needed"),
+                           # A failure that only names a login on its way is not a refusal of it.
+                           ("connect ECONNRESET while loading login state", "agent error"),
                            ("Segmentation fault", "agent error")):
             self.assertEqual(daily.agent_state(said), kind, said)
 

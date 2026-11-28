@@ -103,8 +103,12 @@ ONE_SHOT = {
 AGENT_STATES = [
     ("usage limit", re.compile(r"usage limit|rate.?limit|\b429\b|quota|too many requests|limit reached|"
                                r"out of credits|insufficient (?:credit|balance|funds)", re.I)),
-    ("login needed", re.compile(r"log ?in|sign ?in|logged out|unauthori[sz]ed|\b401\b|\b403\b|authenticat|"
-                                r"credential|expired|re-?auth|api key", re.I)),
+    # Only a refusal of the sign-in itself: an unknown failure that names a
+    # login on the way is an agent error, not a sign-in for a person to make.
+    ("login needed", re.compile(r"not (?:logged|signed) in|logged out|(?:log|sign) ?in (?:again|required)|"
+                                r"please (?:log|sign) ?in|run /?login|unauthori[sz]ed|\b401\b|"
+                                r"authentication (?:failed|required)|invalid (?:api key|credentials?|token)|"
+                                r"(?:token|session|credentials?|login) (?:has )?expired|re-?authenticate", re.I)),
     ("update needed", re.compile(r"update|upgrade|newer version|no longer supported|unsupported version", re.I)),
 ]
 
