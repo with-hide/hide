@@ -498,13 +498,74 @@ fn core_of(said: Said) -> Option<CoreThere> {
     }
 }
 
-/// Asks the machine `alias` names whether it can pair over SSH. Blocks for
-/// as long as ssh takes to sign in and the target to answer.
-pub fn look(reach: &Reach, alias: &str) -> Looked {
+/// What a Host the operator chose in Add device said (B7): whether a Hide of
+/// its own runs, the system its account runs, and for one that runs none,
+/// why a switch could start none there, `None` when it could. Add device
+/// and `hide device add` connect it as a server from this, or add it over
+/// SSH (operator decision 2026-11-28).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostLook {
+    pub looked: Looked,
+    /// As `std::env::consts::OS` spells it; none for a login that did not
+    /// sign in.
+    pub system: Option<String>,
+    /// For [`Looked::Absent`] alone: the code of why no Hide is started
+    /// there.
+    pub leaves: Option<&'static str>,
+}
+
+/// Asks the machine `alias` names whether it can pair over SSH and, when it
+/// runs no Hide, whether one can be started there, over one login that asks
+/// nobody and changes nothing there. Blocks for as long as ssh takes to
+/// sign in and the target to answer.
+pub fn look(reach: &Reach, alias: &str) -> HostLook {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
-    let looked = look_on(&Ssh(&upstream), reach);
+    let login = Ssh(&upstream);
+    let looked = host_look(&login, look_on(&login, reach));
     upstream.close();
     looked
+}
+
+/// `looked`, with what the login it was read on says of the machine.
+fn host_look(login: &dyn Login, looked: Looked) -> HostLook {
+    if looked == Looked::NotReached {
+        return HostLook {
+            looked,
+            system: None,
+            leaves: None,
+        };
+    }
+    let system = login
+        .system()
+        .map_err(|error| not_reached(login, "system", &error))
+        .ok();
+    let leaves = match (&looked, system.as_deref()) {
+        (Looked::Absent, Some(system)) => takes_no_hide(login, system),
+        (Looked::Absent, None) => Some(login.channel().not_reached()),
+        _ => None,
+    };
+    HostLook {
+        looked,
+        system,
+        leaves,
+    }
+}
+
+/// Why a switch could start no Hide on an account of `system` that runs
+/// none, read before anything is put there: the rule [`switch_on`] and
+/// [`may_move`] pass, as far as it is read without a `hide` there. Windows
+/// is not switched, a Mac takes a Hide only from a Mac, and a Linux with no
+/// systemd has nothing that starts it again. Whether a Linux account may
+/// linger and whether a Mac has someone logged in are read by the switch
+/// itself, through the `hide` its device helper brings.
+fn takes_no_hide(login: &dyn Login, system: &str) -> Option<&'static str> {
+    match system {
+        "windows" => Some("windows"),
+        "macos" => install_refusal(system, std::env::consts::OS, None),
+        "linux" if runs_systemd(login) => None,
+        "linux" => Some("no_systemd"),
+        _ => Some("unknown"),
+    }
 }
 
 /// [`look`], on a login.
@@ -1238,6 +1299,110 @@ mod tests {
                 assert_eq!(install_refusal(target, from, Some(false)), None);
             }
         }
+    }
+
+    /// An account with no `hide` at all, as a scripted login: every `hide`
+    /// is a command that is not there, and `/run/systemd/system` is there
+    /// when `systemd` says so.
+    struct Bare {
+        system: Result<&'static str, ()>,
+        systemd: bool,
+    }
+
+    impl Login for Bare {
+        fn channel(&self) -> Channel {
+            Channel::Ssh
+        }
+
+        fn name(&self) -> &str {
+            "bare"
+        }
+
+        fn system(&self) -> Result<String, String> {
+            self.system
+                .map(str::to_owned)
+                .map_err(|()| "lost".to_owned())
+        }
+
+        fn on(&self) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn run(&self, argv: &[String], _cap: usize, _within: Duration) -> Result<Ran, String> {
+            let status = match argv.first().map(String::as_str) {
+                Some("test") if self.systemd => 0,
+                Some("test") => 1,
+                _ => 127,
+            };
+            Ok(Ran {
+                status,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn first(&self, _own: &[Candidate]) -> Vec<Candidate> {
+            Vec::new()
+        }
+
+        fn install(&self, _packages: &HelperPackages, _root: &str) -> Result<String, NotInstalled> {
+            Err(NotInstalled::Failed("not scripted".to_owned()))
+        }
+    }
+
+    /// Add device connects a Host with no Hide as a server only where the
+    /// switch could start one (operator decision 2026-11-28): Windows, a
+    /// Linux with no systemd and a Mac asked from another system are added
+    /// over SSH with the reason, and a machine with a Hide of its own is
+    /// asked nothing more.
+    #[test]
+    fn a_host_with_no_hide_says_whether_a_switch_could_start_one() {
+        let leaves = |system, systemd| {
+            let login = Bare { system, systemd };
+            let reach = Reach {
+                home: PathBuf::from("/nonexistent"),
+                command_folder: None,
+                hide: None,
+            };
+            let look = host_look(&login, look_on(&login, &reach));
+            assert_eq!(look.looked, Looked::Absent);
+            look.leaves
+        };
+        assert_eq!(leaves(Ok("linux"), true), None);
+        assert_eq!(leaves(Ok("linux"), false), Some("no_systemd"));
+        assert_eq!(leaves(Ok("windows"), true), Some("windows"));
+        assert_eq!(leaves(Ok("freebsd"), true), Some("unknown"));
+        let mac = install_refusal("macos", std::env::consts::OS, None);
+        assert_eq!(leaves(Ok("macos"), true), mac);
+        assert_eq!(
+            host_look(
+                &Bare {
+                    system: Err(()),
+                    systemd: true
+                },
+                Looked::Absent
+            ),
+            HostLook {
+                looked: Looked::Absent,
+                system: None,
+                leaves: Some("ssh_not_reached"),
+            }
+        );
+        let ready = host_look(
+            &Bare {
+                system: Ok("macos"),
+                systemd: false,
+            },
+            Looked::Ready,
+        );
+        assert_eq!(
+            ready,
+            HostLook {
+                looked: Looked::Ready,
+                system: Some("macos".to_owned()),
+                leaves: None,
+            }
+        );
     }
 
     /// A target account whose own Hide stopped, as a scripted login: it

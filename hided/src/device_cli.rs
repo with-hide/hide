@@ -23,7 +23,7 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 /// Every verb a person types, which `hide --help` and the agent guide list.
-pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device rename <device> <name> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--ssh] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device rename <device> <name> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -41,6 +41,11 @@ const SWITCH_BOUND: Duration = Duration::from_secs(
         + crate::pairing::SWITCH_CONNECTS_WITHIN.as_secs()
         + 30,
 );
+
+/// How long `add` waits for a machine it connects as a server: its first
+/// connection as a helper device, then its switch.
+const ADD_SERVER_BOUND: Duration =
+    Duration::from_secs(crate::pairing::ADDED_CONNECTS_WITHIN.as_secs() + SWITCH_BOUND.as_secs());
 
 /// How long `projects-ssh` works: under what the machine that runs it over
 /// SSH waits for (`pairing_ssh::PROJECTS_WITHIN`).
@@ -72,8 +77,12 @@ impl Direction {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Verb {
-    /// The core's own: the list, and adding an SSH device.
+    /// The core's own: the list, and adding an SSH device, connected as a
+    /// server when its machine can be.
     Core(DeviceCommand),
+    /// `add <ssh alias> --ssh`: the core's SSH device alone, whatever runs
+    /// on its machine; nothing is looked at there.
+    AddOverSsh(DeviceCommand),
     Share,
     Join {
         link: String,
@@ -195,7 +204,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 install = true;
                 continue;
             }
-            "--ssh" if verb == Some("carry") && !ssh => {
+            "--ssh" if matches!(verb, Some("carry" | "add")) && !ssh => {
                 ssh = true;
                 continue;
             }
@@ -248,15 +257,22 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         (Some("allow"), []) => Verb::Allow,
         (Some("add"), [link]) if link.starts_with(LINK_PREFIX) => {
             // A name is the SSH device's; a link's machine says its own.
-            if name.is_some() || link.len() > hide_peer::limits::MAX_LINK_BYTES {
+            if name.is_some() || ssh || link.len() > hide_peer::limits::MAX_LINK_BYTES {
                 return Err(USAGE.to_owned());
             }
             Verb::Join { link: link.clone() }
         }
-        (Some("add"), [alias]) => Verb::Core(DeviceCommand::Add {
-            ssh_alias: alias.clone(),
-            name,
-        }),
+        (Some("add"), [alias]) => {
+            let command = DeviceCommand::Add {
+                ssh_alias: alias.clone(),
+                name,
+                host_consent: false,
+            };
+            match ssh {
+                true => Verb::AddOverSsh(command),
+                false => Verb::Core(command),
+            }
+        }
         (Some("pause"), [device]) => Verb::Pause {
             device: named(device)?,
             direction,
@@ -320,7 +336,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         }
         _ => return Err(USAGE.to_owned()),
     };
-    if let Verb::Core(command) = &verb
+    if let Verb::Core(command) | Verb::AddOverSsh(command) = &verb
         && !command.valid()
     {
         return Err(USAGE.to_owned());
@@ -390,6 +406,7 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             add_alias(env, command, ssh_alias, cli.wait)
         }
         Verb::Core(command) => core(env, command, cli.wait),
+        Verb::AddOverSsh(command) => core(env, command, cli.wait),
         Verb::Share => share(env, cli.json),
         Verb::Join { link } => join(env, link, cli.json),
         Verb::Allow => allow(env),
@@ -514,28 +531,9 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
         Verb::Switch { device, install } => {
             operators(env)?;
             let ask = json!({"verb":"switch","device":device,"install":install});
-            let mut answer = crate::workspace_cli::pairing_ask_within(env, ask, SWITCH_BOUND)
+            let answer = crate::workspace_cli::pairing_ask_within(env, ask, SWITCH_BOUND)
                 .map_err(Refused::Unreachable)?;
-            if answer["ok"] != true {
-                let code = answer["reason"]
-                    .as_str()
-                    .unwrap_or("device_unavailable")
-                    .to_owned();
-                let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
-                return Err(Refused::Answer { code, message });
-            }
-            if let Some(fields) = answer.as_object_mut() {
-                fields.remove("ok");
-            }
-            let lines = match answer["switch"].as_str() {
-                Some("left") => left_line(device, &answer["condition"]),
-                Some("held") => held_line(device, &answer),
-                Some("install_needed") => format!(
-                    "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"
-                ),
-                _ => switched_lines(device, &answer["condition"]),
-            };
-            Ok(Printed::Value(answer, lines))
+            switched(device, answer)
         }
         Verb::Carry { .. } => unreachable!("run answers it before anything is printed"),
         Verb::LookSsh => {
@@ -783,14 +781,17 @@ fn operators(env: &Env) -> Result<(), Refused> {
     Ok(())
 }
 
-/// Adds a machine by its SSH alias (B7). One whose own Hide runs is paired
-/// over SSH, which installs nothing there; any other is the core's SSH
-/// device, as before, with a line when its Hide could pair once it is
-/// updated or running. A command the daemon refuses to look for (a pane's)
-/// goes to the core unchanged. An alias one of this computer's devices is
-/// dialed by is neither looked at nor added again: its look would be
-/// answered by the helper this computer runs there, and what puts Hide there
-/// is that device's switch (with-hide/hide#3007).
+/// Adds a machine by its SSH alias (B7) the way Add device does (operator
+/// decision 2026-11-28): one whose own Hide runs is paired over SSH, which
+/// installs nothing there; one that runs none and can take one is added
+/// and switched with a Hide started there (`add_server`); any other is the
+/// core's SSH device, with the one line of why it is not connected as a
+/// server. `--ssh` adds over SSH alone and never comes here. A command the
+/// daemon refuses to look for (a pane's) goes to the core unchanged. An
+/// alias one of this computer's devices is dialed by is neither looked at
+/// nor added again: its look would be answered by the helper this computer
+/// runs there, and what puts Hide there is that device's switch
+/// (with-hide/hide#3007).
 fn add_alias(
     env: &Env,
     command: &DeviceCommand,
@@ -806,11 +807,13 @@ fn add_alias(
     } else {
         None
     };
-    match looked
+    let state = looked
         .as_ref()
-        .and_then(|looked| looked["looked"]["state"].as_str())
-    {
-        Some("ready") => {
+        .and_then(|looked| looked["looked"]["state"].as_str());
+    let leaves = looked.as_ref().and_then(|looked| looked["leaves"].as_str());
+    let over_ssh = "Adding it as an SSH device.";
+    match (state, leaves) {
+        (Some("ready"), _) => {
             let answer =
                 crate::workspace_cli::pairing_ask(env, json!({"verb":"pair_ssh","alias":alias}))
                     .map_err(Refused::Unreachable)?;
@@ -834,27 +837,66 @@ fn add_alias(
                 ),
             ));
         }
-        Some("update_there") => eprintln!(
-            "Hide on {alias} is too old to connect as a Hide: update it there to connect that way. Adding it as an SSH device."
+        (Some("absent"), None) => {
+            let name = match command {
+                DeviceCommand::Add { name, .. } => name.clone(),
+                _ => None,
+            };
+            eprintln!(
+                "{alias} runs no Hide of its own: adding it and starting Hide there, which takes a few minutes. hide device add {alias} --ssh uses it over SSH alone instead."
+            );
+            let ask = json!({"verb":"add_server","alias":alias,"name":name});
+            let answer = crate::workspace_cli::pairing_ask_within(env, ask, ADD_SERVER_BOUND)
+                .map_err(Refused::Unreachable)?;
+            return switched(alias, answer);
+        }
+        (Some("absent"), Some(code)) => eprintln!("{} {over_ssh}", leaves_line(alias, code)),
+        (Some("update_there"), _) => eprintln!(
+            "Hide on {alias} is too old to connect as a Hide: update it there to connect that way. {over_ssh}"
         ),
-        Some("refused") => eprintln!(
-            "Hide on {alias} refused the request that came over SSH (this machine's diagnostic log names its reason): connecting as a Hide needs it to answer. Adding it as an SSH device."
+        (Some("refused"), _) => eprintln!(
+            "Hide on {alias} refused the request that came over SSH (this machine's diagnostic log names its reason): connecting as a Hide needs it to answer. {over_ssh}"
         ),
-        Some("not_running") => eprintln!(
-            "Hide is installed on {alias} and is not running: log in there and open Hide to connect as a Hide. Adding it as an SSH device."
+        (Some("not_running"), _) => eprintln!(
+            "Hide is installed on {alias} and is not running: log in there and open Hide to connect as a Hide. {over_ssh}"
+        ),
+        (Some("not_reached"), _) => eprintln!(
+            "SSH could not sign in to {alias} without asking (a password, a passphrase or a key's touch) or did not reach it, so it cannot be connected as a server. {over_ssh}"
         ),
         _ => {}
     }
-    // The line says how an SSH device becomes its machine's own Hide: only
-    // when the operator asks for it.
+    // Nothing was read there: the line says how an SSH device becomes its
+    // machine's own Hide, only when the operator asks for it.
     match core(env, command, wait)? {
-        Printed::Value(value, lines) => Ok(Printed::Value(
+        Printed::Value(value, lines) if looked.is_none() => Ok(Printed::Value(
             value,
             format!(
                 "{lines}{alias} is used over SSH. To connect the two as Hides, so it works without this computer, run hide device switch {alias} --install once it is connected.\n"
             ),
         )),
         printed => Ok(printed),
+    }
+}
+
+/// Why a machine with no Hide of its own is not connected as a server, by
+/// the code its look answered (`pairing_ssh::HostLook::leaves`).
+fn leaves_line(alias: &str, code: &str) -> String {
+    match code {
+        "windows" => format!(
+            "{alias} runs Windows, which is not connected as a server yet: to use it as one, install Hide on that PC and connect the two by a link it shares."
+        ),
+        "no_systemd" => format!(
+            "{alias} has no systemd, so nothing would start its Hide again: it cannot be connected as a server."
+        ),
+        "ssh_mac_from_mac_only" => format!(
+            "A Mac takes a Hide only from a Mac: install Hide on {alias} and connect the two by a link it shares."
+        ),
+        "ssh_not_reached" => {
+            format!("SSH did not answer which system {alias} runs, so no Hide is started there.")
+        }
+        _ => format!(
+            "{alias} runs a system Hide is not started on, so it cannot be connected as a server."
+        ),
     }
 }
 
@@ -1325,6 +1367,32 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
 /// (operator decision 2026-11-24): the rule every switch passes, said
 /// to the one who asked at a terminal. `condition` is what the machine
 /// said (`pairing_ssh::Condition::payload`).
+/// A switch's answer, of `hide device switch` or of an `add` that connects
+/// its machine as a server, for the one who asked: how it ended, or why it
+/// did not start.
+fn switched(device: &str, mut answer: Value) -> Result<Printed, Refused> {
+    if answer["ok"] != true {
+        let code = answer["reason"]
+            .as_str()
+            .unwrap_or("device_unavailable")
+            .to_owned();
+        let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
+        return Err(Refused::Answer { code, message });
+    }
+    if let Some(fields) = answer.as_object_mut() {
+        fields.remove("ok");
+    }
+    let lines = match answer["switch"].as_str() {
+        Some("left") => left_line(device, &answer["condition"]),
+        Some("held") => held_line(device, &answer),
+        Some("install_needed") => format!(
+            "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"
+        ),
+        _ => switched_lines(device, &answer["condition"]),
+    };
+    Ok(Printed::Value(answer, lines))
+}
+
 fn left_line(device: &str, condition: &Value) -> String {
     let stays = format!("{device} is not switched and is used as before");
     let then = format!("then run hide device switch {device} again");
@@ -1689,6 +1757,9 @@ mod tests {
         assert!(parse_words(&["rename", "win", "a", "b"]).is_err());
     }
 
+    /// An alias is added with an optional name; with `--ssh` it is the
+    /// core's SSH device alone, whatever its machine runs (operator
+    /// decision 2026-11-28), and a link takes no `--ssh`.
     #[test]
     fn add_takes_an_alias_with_an_optional_name() {
         assert_eq!(
@@ -1697,6 +1768,7 @@ mod tests {
                 verb: Verb::Core(DeviceCommand::Add {
                     ssh_alias: "studio".into(),
                     name: Some("Studio".into()),
+                    host_consent: false,
                 }),
                 json: false,
                 wait: false,
@@ -1707,6 +1779,17 @@ mod tests {
         assert!(parse_words(&["add", "a", "--name"]).is_err());
         assert!(parse_words(&["list", "--name", "x"]).is_err());
         assert!(parse_words(&["add", "studio", "--socket", "/x"]).is_err());
+        assert_eq!(
+            parse_words(&["add", "studio", "--ssh"]).map(|cli| cli.verb),
+            Ok(Verb::AddOverSsh(DeviceCommand::Add {
+                ssh_alias: "studio".into(),
+                name: None,
+                host_consent: false,
+            }))
+        );
+        assert!(parse_words(&["add", "hide://pair#x", "--ssh"]).is_err());
+        assert!(parse_words(&["add", "studio", "--ssh", "--ssh"]).is_err());
+        assert!(parse_words(&["list", "--ssh"]).is_err());
     }
 
     /// The operator's decision of 2026-11-24: a device that moved to its

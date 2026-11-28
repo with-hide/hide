@@ -7,11 +7,14 @@
 // operator (PRD system-ssh-device-link B4-B14) and stopped in each of the
 // three failure states, sign in, server key and cannot connect, on a Mac, or
 // with `system=windows` on the PC.
-// `look=ready|update_there|not_running|sign_in` is what a chosen SSH Host's
-// own Hide answers the dialog (PRD device-connect-iroh B7): choose `studio`
-// and its one line is drawn, with `Connect` where the two can pair; with no
-// `look` it has no Hide, and its line says how one gets there. `mini` and
-// WSL Debian are added, each with its way to its device's 서버로 연결.
+// `look=ready|windows|password|update_there|not_running|sign_in` is what a
+// chosen SSH Host answers the dialog (PRD device-connect-iroh B7; operator
+// decision 2026-11-28): choose `studio` and its way is drawn, the server
+// card with `서버로 연결` where its own Hide runs, the SSH card with the one
+// line of why where it cannot be a server; with no `look` it runs no Hide
+// and can take one, and the card says Hide is installed there. `mini` and
+// WSL Debian are added, each with its way to its device's
+// 서버로 연결.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -92,12 +95,15 @@ const FAILURES: Device[] = [
   { ...failed("office-pc", "windows_not_started"), host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: null, contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "unavailable", message: null, platform: "windows x86_64", helper_path: null } },
 ];
 
-/** What a chosen Host's own Hide answers, by the scene's `look`. */
-const LOOKS: Record<string, SshLook> = {
-  ready: { state: "ready", system: "macos" },
-  update_there: { state: "update_there", system: "windows" },
-  not_running: { state: "not_running", system: "linux" },
-  sign_in: { state: "not_running", system: "macos" },
+/** What a chosen Host answers, by the scene's `look`: its own Hide, the system its account runs, and why no Hide can be started there. */
+const LOOKS: Record<string, { looked: SshLook; system: string | null; leaves: string | null }> = {
+  install: { looked: { state: "absent" }, system: "linux", leaves: null },
+  ready: { looked: { state: "ready" }, system: "macos", leaves: null },
+  windows: { looked: { state: "absent" }, system: "windows", leaves: "windows" },
+  password: { looked: { state: "not_reached" }, system: null, leaves: null },
+  update_there: { looked: { state: "update_there" }, system: "windows", leaves: null },
+  not_running: { looked: { state: "not_running", system: "linux" }, system: "linux", leaves: null },
+  sign_in: { looked: { state: "not_running", system: "macos" }, system: "macos", leaves: null },
 };
 
 export function AddDeviceScene({ params }: { params: URLSearchParams }) {
@@ -115,8 +121,8 @@ export function AddDeviceScene({ params }: { params: URLSearchParams }) {
         // The chosen Host or distribution answers the dialog's one question: its own Hide, or none there.
         if (event.kind === "pairing_look_ssh" || event.kind === "pairing_look_wsl") {
           const { request_id } = event.payload as { request_id: string };
-          const looked: SshLook = (look === null ? undefined : LOOKS[look]) ?? { state: "absent" };
-          queueMicrotask(() => useShellStore.setState({ pairingResult: { verb: event.kind.slice("pairing_".length), ok: true, request_id, looked } }));
+          const said = event.kind === "pairing_look_wsl" ? { looked: { state: "absent" as const }, system: "linux", leaves: null } : LOOKS[look ?? "install"]!;
+          queueMicrotask(() => useShellStore.setState({ pairingResult: { verb: event.kind.slice("pairing_".length), ok: true, request_id, ...said } }));
         }
         return true;
       }),
@@ -154,7 +160,7 @@ function Body({ actions }: { actions: ReturnType<typeof createActions> }) {
           <DialogTitle>{t("devices.addTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
-          <AddDevice actions={actions} devices={ADDED} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={() => {}} onShowDevice={() => {}} />
+          <AddDevice actions={actions} devices={ADDED} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onClose={() => {}} onShowDevice={() => {}} />
         </DialogBody>
       </DialogContent>
     </Dialog>

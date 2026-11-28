@@ -6581,7 +6581,8 @@
             "answers": [
                 "device_added",
                 "device_joined",
-                "device_paired"
+                "device_paired",
+                "device_switched"
             ],
             "arguments": [
                 {
@@ -6600,6 +6601,12 @@
                     "value": {
                         "type": "text"
                     }
+                },
+                {
+                    "name": "--ssh",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 },
                 {
                     "name": "--json",
@@ -6633,7 +6640,17 @@
                 "ssh_busy",
                 "device_own",
                 "device_limit",
-                "peer_unavailable"
+                "peer_unavailable",
+                "device_not_added",
+                "added_not_connected",
+                "device_unknown",
+                "switch_running",
+                "switch_not_connected",
+                "switch_not_moved",
+                "switch_cut",
+                "ssh_core_not_started",
+                "ssh_mac_from_mac_only",
+                "ssh_mac_signed_out"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9821,7 +9838,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c7d1f6b4af82b31c72fbcc13937a48e7f3fbd476d94388abe368169031fb0f4f",
+    "digest": "sha256:e2cf8fb8ed15b21d6f992f9f42673ccdc5d27e74e8b04f3fcd9867d54c70d058",
     "envelopes": {
         "access": {
             "answer": "value",

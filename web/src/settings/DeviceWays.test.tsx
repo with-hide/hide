@@ -102,12 +102,14 @@ const asleep = (q: (selector: string) => HTMLElement | null, card: "direct" | "s
     ["agents", "missions", "automations"].map((row) => [row, q(`[data-device-way-row="${card}"] [data-device-keep="${row}"] [data-keep-asleep]`)?.textContent]),
   );
 
-it("lays the two ways side by side and says what each keeps doing while this computer sleeps", async () => {
+it("lays the two ways side by side, the server first, and says what each keeps doing while this computer sleeps", async () => {
   const { q, answer, press, unmount } = await mount([helper()]);
   await press(FOLD);
   await answer("look_switch", { condition: { kind: "auto_login_on" }, user: "me" });
   const direct = '[data-device-way-row="direct"]';
   const server = '[data-device-way-row="server"]';
+  // The way Add device recommends comes first (operator decision 2026-11-28).
+  expect([...document.querySelectorAll("[data-device-way-row]")].map((card) => card.getAttribute("data-device-way-row"))).toEqual(["server", "direct"]);
   expect(q(`${direct} [data-device-way-headline]`)?.textContent).toBe("When this computer sleeps,missions and automations stop too");
   expect(q(`${server} [data-device-way-headline]`)?.textContent).toBe("Even when this computer sleeps,it keeps running on Mac mini");
   // Over SSH the agents go on in their terminals, while missions and automations wait for this computer.

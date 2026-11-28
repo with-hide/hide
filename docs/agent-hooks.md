@@ -1469,7 +1469,7 @@ Removing a device from Hide does that on the device while its helper is connecte
 
 `hide-agent-hooks doctor [--json]` prints the same judgement in a terminal, because a broken hook shows on screen only as a Not connected chip on a Claude Code or Codex pane and nowhere for any other agent, and the output of that command is the evidence.
 Install and remove are deliberately not CLI subcommands: writing to the operator's configuration is the kit's decision, agreed to when the app was installed or a device's helper allowed in Settings › Devices, not something a stray command line performs.
-`hide device add` registers a device without that agreement, so it installs nothing, and `hide device remove` takes the kit off only as removing the device in Settings does.
+`hide device add` from a Hide pane registers a device without that agreement, so it installs nothing; at the operator's own terminal, outside Hide's panes, the command is that agreement for a machine it connects as a server, as Add device's press is (`add_server`), and `--ssh` adds without it. `hide device remove` takes the kit off only as removing the device in Settings does.
 
 ### More than one Hide on an account
 

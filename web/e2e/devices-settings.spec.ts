@@ -178,6 +178,11 @@ test("the Add dialog lists the account's Hosts, fills the name from the chosen o
     await host.click();
     await expect(dialog.locator("[data-device-label]")).toHaveValue(ALIAS);
     await expect(dialog.locator("[data-add-device]")).toBeEnabled();
+    // hided's look at a Host ssh cannot reach finds no machine to make a server of: the dialog says why and adds it over SSH.
+    await expect(dialog.locator('[data-add-way-reason="not_reached"]')).toBeVisible();
+    await expect(dialog.locator('[data-add-way="ssh"]')).toBeVisible();
+    await expect(dialog.locator("[data-add-device]")).toHaveAttribute("data-add-device", "true");
+    await expect(dialog.locator("[data-add-device-direct]")).toHaveCount(0);
 
     // B53: the three install lines sit under Advanced, closed at first, and no socket is asked for.
     const advanced = dialog.locator("[data-add-device-advanced]");

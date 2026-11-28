@@ -8,12 +8,15 @@
 // (`status.ssh_hosts`), asked for when the dialog opens.
 //
 // A chosen Host is asked, over an ssh that asks nobody, whether a Hide of
-// its own runs there (PRD device-connect-iroh B7), and a chosen distribution
-// through wsl.exe (D-27), which starts it when it is off (B43). One that
-// does is connected to as a Hide, which installs nothing there, and the
-// form says so before the press; one whose Hide is too old or not running
-// says what to do on that machine; any other is added and used over SSH
-// or WSL, and nothing switches it but the operator's own choice.
+// its own runs there and, when none does, whether one can be started there
+// (PRD device-connect-iroh B7; `addWay.ts`). It is connected as a server
+// where it can be (operator decision 2026-11-28): paired with the Hide it
+// runs, which installs nothing there, or added and switched with a Hide
+// started there; one that cannot be says why in one line and is added over
+// SSH, which stays one small row under the server card for any Host. A
+// chosen distribution is asked the same through wsl.exe (D-27), which
+// starts it when it is off (B43): one whose own Hide runs is connected to,
+// any other is added and used over WSL until its row connects it.
 
 import { useEffect, useId, useState } from "react";
 import type { Actions } from "../actions";
@@ -23,11 +26,16 @@ import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Disclosure, Group, Note, Row, Status } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import type { Device } from "../snapshot";
+import type { Device, DeviceSwitchStep } from "../snapshot";
 import { chosenDistro, defaultDeviceName, hostChoices, pickableAliases, wslChoices, type HostChoice, type WslChoice } from "../sshHosts";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
-import { isPairLink, refusalKey, sshLookLine, type SshLook } from "../pairing";
+import { isPairLink, refusalKey, sshLookLine, type PairingResult } from "../pairing";
+import { useOnScreen } from "../lib/useOnScreen";
+import { useUiStore } from "../ui";
+import { addWay, systemName, type AddWay, type HostAnswer } from "./addWay";
+import { Headline, Picture, SwitchSteps, WayCard } from "./DeviceWays";
+import type { SwitchOutcome } from "./switchWays";
 import { useRefusalSince } from "../errorSince";
 
 const HOST_EXAMPLE = "Host studio\n  HostName studio.local\n  User you";
@@ -78,26 +86,41 @@ export function AddByLink({ actions, onStarted }: { actions: Actions; onStarted:
   );
 }
 
-export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired, onShowDevice }: { actions: Actions; devices: Device[]; helperRoot: string | null; cliDir: string | null; onPaired: () => void; onShowDevice?: (deviceId: string) => void }) {
+export function AddDevice({ actions, devices, helperRoot, cliDir, onClose, onShowDevice }: { actions: Actions; devices: Device[]; helperRoot: string | null; cliDir: string | null; onClose: () => void; onShowDevice?: (deviceId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const hosts = useShellStore((s) => s.rest?.status?.ssh_hosts);
   const answered = useShellStore((s) => s.pairingResult);
-  // What the chosen Host's own Hide answered (nothing, when the look was
-  // refused), and the pairing a press started.
-  const [look, setLook] = useState<{ alias: string; request: string; answered: boolean; looked: SshLook | null } | null>(null);
-  const [pairing, setPairing] = useState<{ request: string; refused: string | null } | null>(null);
-  // The Host whose own Hide the operator chose not to connect to: it is added as an SSH device, as a Host with no Hide is.
-  const [overSsh, setOverSsh] = useState<string | null>(null);
+  // What the chosen Host or distribution answered, and the press that
+  // connects it as a server: a pairing with the Hide it runs, or a Hide
+  // started there (`add_server`).
+  const [look, setLook] = useState<{ alias: string; request: string; answer: HostAnswer } | null>(null);
+  const [pairing, setPairing] = useState<{ request: string; alias: string; verb: "pair" | "add_server"; refused: string | null } | null>(null);
   useEffect(() => {
     if (!answered?.request_id) return;
-    if ((answered.verb === "look_ssh" || answered.verb === "look_wsl") && answered.request_id === look?.request && !look.answered) {
-      setLook({ ...look, answered: true, looked: answered.ok ? (answered.looked ?? null) : null });
+    if ((answered.verb === "look_ssh" || answered.verb === "look_wsl") && answered.request_id === look?.request && !look.answer.answered) {
+      const answer: HostAnswer = answered.ok ? { answered: true, looked: answered.looked ?? null, system: answered.system ?? null, leaves: answered.leaves ?? null } : { answered: true, looked: null, system: null, leaves: null };
+      setLook({ ...look, answer });
     }
-    if ((answered.verb === "pair_ssh" || answered.verb === "pair_wsl") && answered.request_id === pairing?.request && pairing.refused === null) {
-      if (answered.ok) onPaired();
-      else setPairing({ ...pairing, refused: answered.reason ?? "" });
+    if (answered.request_id !== pairing?.request || pairing.refused !== null) return;
+    const refused = () => setPairing({ ...pairing, refused: answered.reason ?? "" });
+    if (answered.verb === "pair_ssh" || answered.verb === "pair_wsl") {
+      if (answered.ok) onClose();
+      else refused();
+    } else if (answered.verb === "add_server") {
+      // The device was added over SSH and not switched: its row, where the
+      // switch can be pressed again, says why; a machine never added says
+      // it here.
+      const device = devices.find((row) => row.id === answered.device_id) ?? devices.find((row) => row.ssh_alias === pairing.alias);
+      if (answered.ok && answered.switch === "done") onClose();
+      else if (!device || !onShowDevice) refused();
+      else {
+        const outcome = serverAddOutcome(answered);
+        if (outcome) useUiStore.getState().setSwitchOutcome(device.id, outcome);
+        setPairing(null);
+        onShowDevice(device.id);
+      }
     }
-  }, [answered, look, pairing, onPaired]);
+  }, [answered, look, pairing, devices, onClose, onShowDevice]);
   const [alias, setAlias] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
@@ -117,63 +140,79 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired, onSh
   const distro = chosen === null ? null : chosenDistro(chosen);
   const distribution = distributions.find((choice) => choice.value === chosen) ?? null;
   const added = submitted ? devices.some((device) => (submitted.distro !== null ? device.wsl_distro === submitted.distro : device.ssh_alias === submitted.alias)) : false;
-  const looked = look !== null && look.alias === chosen ? look.looked : null;
-  const lookLine = sshLookLine(looked);
-  // The chosen Host runs its own Hide: the press connects, and installs
-  // nothing, unless the operator asked to add it over SSH all the same,
-  // which leaves that Hide as it is.
-  const hasHide = looked?.state === "ready";
-  const connects = hasHide && overSsh !== chosen;
-  const connecting = pairing !== null && pairing.refused === null;
-  const pending = (submitted !== null && !added && error === null) || connecting;
+  // An added device closes the dialog: its row is listed now.
+  useEffect(() => {
+    if (added) onClose();
+  }, [added, onClose]);
+  const answer: HostAnswer = look !== null && look.alias === chosen ? look.answer : { answered: false };
+  // A Host's way (operator decision 2026-11-28); a distribution keeps the
+  // form it had: connected to when its own Hide runs, else added.
+  const way = chosen === null ? null : distro === null ? addWay(answer) : null;
+  const looked = answer.answered ? answer.looked : null;
+  const lookLine = distro === null ? null : sshLookLine(looked);
+  const connects = way?.kind === "connect" || (distro !== null && looked?.state === "ready");
+  const running = pairing !== null && pairing.refused === null;
+  const pending = (submitted !== null && !added && error === null) || running;
   // Until the Host answered, a press would add a machine that runs its own
   // Hide as a helper device: the press waits for the answer.
-  const looking = look !== null && look.alias === chosen && !look.answered;
-  const blocked = pending || looking || chosen === null || (distro === null && !connects && !name.trim());
+  const looking = chosen !== null && !answer.answered;
+  // A press that adds a device names it; a pairing keeps the name that machine gives itself.
+  const named = distro !== null || connects || name.trim() !== "";
+  const blocked = pending || looking || chosen === null || !named;
   // An added machine's row opens that device's row, where its 서버로 연결 is, when the dialog sits on Settings › Devices.
   const shown = (device: Device | undefined) => (device && onShowDevice ? () => onShowDevice(device.id) : null);
   const choose = (next: string) => {
     setAlias(next);
     setPairing(null);
-    setOverSsh(null);
     const picked = chosenDistro(next);
     // The name follows the Host until the person writes their own; a
     // distribution's is the core's.
     if (picked === null && !nameEdited) setName(defaultDeviceName(next));
     const request = `look-${Date.now()}`;
-    setLook({ alias: next, request, answered: false, looked: null });
+    setLook({ alias: next, request, answer: { answered: false } });
     if (picked === null) actions.pairing("look_ssh", { alias: next, request_id: request });
     else actions.pairing("look_wsl", { distro: picked, request_id: request });
   };
-  // Adding is where the whole kit is agreed to, once (PRD device-parity
-  // D-12): what Hide installs is under Advanced and the description above
-  // says it, and there is one way to add.
+  // Adding over SSH or wsl.exe is where the whole kit is agreed to, once
+  // (PRD device-parity D-12): what Hide installs is under Advanced and the
+  // description above says it. A device added so is used over that login
+  // until the operator connects it as a server from its row (operator
+  // decision 2026-11-24): the Add never ends without the device.
+  const addOverLogin = () => {
+    if (pending || looking || chosen === null) return;
+    if (distro !== null) {
+      setSubmitted({ alias: null, distro, at: Date.now() });
+      actions.registerWslDevice(distro);
+    } else if (name.trim()) {
+      setSubmitted({ alias: chosen, distro: null, at: Date.now() });
+      actions.registerDevice(name.trim(), chosen, { hostConsent: true });
+    }
+  };
   const submit = () => {
     if (blocked || chosen === null) return;
+    const request = `pair-${Date.now()}`;
     if (connects) {
-      const request = `pair-${Date.now()}`;
-      setPairing({ request, refused: null });
+      setPairing({ request, alias: chosen, verb: "pair", refused: null });
       if (distro !== null) actions.pairing("pair_wsl", { distro, request_id: request });
       else actions.pairing("pair_ssh", { alias: chosen, request_id: request });
       return;
     }
-    // A device added over SSH or wsl.exe is used over that login until the
-    // operator chooses to connect it as a server from its row (operator
-    // decision 2026-11-24): the Add asks nothing more and never ends
-    // without the device.
-    if (distro !== null) {
-      setSubmitted({ alias: null, distro, at: Date.now() });
-      actions.registerWslDevice(distro);
-    } else {
-      setSubmitted({ alias: chosen, distro: null, at: Date.now() });
-      actions.registerDevice(name.trim(), chosen, { hostConsent: true });
+    // The press is the consent to Hide's helper and to a Hide started there, as the button says.
+    if (way?.kind === "install") {
+      setPairing({ request, alias: chosen, verb: "add_server", refused: null });
+      actions.pairing("add_server", { alias: chosen, name: name.trim(), request_id: request });
+      return;
     }
+    addOverLogin();
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
   const reading = hosts === undefined || ((hosts.state === "idle" || hosts.state === "loading") && hosts.hosts.length === 0 && distributions.length === 0);
   if (reading) return <Note tone="pending" data-ssh-hosts-state="loading">{t("devices.hostsLoading")}</Note>;
   const unreadable = hosts.wsl_problem === "unreadable" ? <Note tone="warn" data-wsl-problem="unreadable">{t("devices.wsl.unreadable")}</Note> : null;
   if (choices.length === 0 && distributions.length === 0) return <>{unreadable}<NoHosts /></>;
+  const server = way?.kind === "connect" || way?.kind === "install";
+  const primary = way === null ? (connects ? t("pairing.add.connect") : t("common.add")) : way.kind === "install" ? t("pairing.add.installConnect") : way.kind === "ssh" ? t("pairing.add.connect") : t("devices.ways.server");
+  const shownName = name.trim() || (chosen ?? "");
   return (
     <div className="space-y-md" data-add-device-form="true">
       <p className="break-keep text-body text-muted-foreground">{t(distributions.length > 0 ? "devices.addDescriptionWsl" : "devices.addDescription")}</p>
@@ -202,6 +241,8 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired, onSh
       <Note data-ssh-hosts-hint="true">{t("devices.notListed")}</Note>
       {looking ? <Note tone="pending" data-ssh-look="looking">{t("pairing.ssh.looking")}</Note> : null}
       {lookLine ? <Status tone={lookLine.tone} data-ssh-look={looked?.state}>{t(lookLine.key)}</Status> : null}
+      {way?.kind === "ssh" && way.reason ? <Note tone="warn" data-add-way-reason={looked?.state ?? ""}>{t(way.reason)}</Note> : null}
+      {way && way.kind !== "looking" && chosen !== null ? <HostWay way={way} name={shownName} running={running && pairing?.verb === "add_server"} step={devices.find((device) => device.ssh_alias === chosen)?.switch_step ?? null} /> : null}
       {pairing?.refused != null ? <Note tone="warn" data-ssh-pair-refused={pairing.refused}>{t(refusalKey(pairing.refused) ?? "pairing.failed.ended")}</Note> : null}
       {connects ? null : (
       <Group>
@@ -224,15 +265,67 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired, onSh
       </Group>
       )}
       <div className="flex items-center justify-end gap-md">
-        {connects && !connecting ? (
-          <Button variant="text" onClick={() => setOverSsh(chosen)} data-add-device-over-ssh="true">
-            {t("pairing.add.overSsh")}
-          </Button>
-        ) : null}
-        <Button disabled={blocked} onClick={submit} data-add-device={connects ? "connect" : "true"}>
-          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : t("common.add")}
+        <Button variant="secondary" onClick={onClose} data-add-device-cancel="true">
+          {t("common.cancel")}
+        </Button>
+        <Button disabled={blocked} onClick={submit} data-add-device={connects ? "connect" : way?.kind === "install" ? "server" : "true"}>
+          {running ? t("pairing.ssh.connecting") : pending ? t("devices.adding") : primary}
         </Button>
       </div>
+      {/* The other way, kept as one small row under the main card (operator decision 2026-11-28). */}
+      {server && !running ? (
+        <div className="flex items-start gap-md border-t border-border pt-sm" data-add-device-direct="true">
+          <p className="min-w-0 flex-1 break-keep text-body text-muted-foreground">
+            <span className="font-medium text-foreground">{t("devices.ways.ssh")}</span>
+            {" · "}
+            {t("pairing.add.directLine")}
+          </p>
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={pending || !name.trim()} onClick={addOverLogin} data-add-device-over-ssh="true">
+            {t("pairing.add.directGo")}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * How a pressed `add_server` that did not switch the device ends on its
+ * row: another computer switched it first, or a step failed. A machine the
+ * rule left, or one that has not connected yet, says so on the row's own
+ * read and line.
+ */
+function serverAddOutcome(answered: PairingResult): SwitchOutcome | null {
+  if (answered.ok) return answered.switch === "held" ? { kind: "held", by: answered.by ?? "", terminals: answered.terminals ?? null } : null;
+  if (answered.reason === "added_not_connected" || answered.reason === "switch_running") return null;
+  return { kind: "failed", reason: answered.reason ?? "" };
+}
+
+/**
+ * The way a chosen Host is connected, as the device row draws it
+ * (`DeviceWays`): the server card with `추천`, what this computer's sleep
+ * does, where Hide runs and what the Host was read as; while a Hide is
+ * started there, the switch's steps in their place. A Host that cannot be
+ * a server shows the SSH card instead.
+ */
+function HostWay({ way, name, running, step }: { way: Exclude<AddWay, { kind: "looking" }>; name: string; running: boolean; step: DeviceSwitchStep | null }) {
+  const { t } = useInterfaceTranslation();
+  const [ref, playing] = useOnScreen<HTMLDivElement>();
+  const server = way.kind !== "ssh";
+  const system = way.kind === "ssh" ? null : systemName(way.system);
+  const read = way.kind === "connect" ? t("pairing.add.hasHide") : way.kind === "install" ? t("pairing.add.noHide", { device: name }) : null;
+  return (
+    <div ref={ref} className="dw-ways" data-playing={playing ? "true" : "false"} data-add-way={way.kind}>
+      <WayCard
+        title={t(server ? "devices.ways.server" : "devices.ways.ssh")}
+        now={false}
+        mark={server ? t("pairing.add.recommended") : undefined}
+        lit={server}
+        foot={read ? <p className="break-keep text-caption text-muted-foreground" data-add-way-read={way.kind}>{system ? `${system} · ${read}` : read}</p> : null}
+      >
+        {server ? <Headline lead={t("devices.ways.serverHead")} turn={t("devices.ways.serverHeadGo", { device: name })} tone="ok" /> : <Headline lead={t("devices.ways.directHead")} turn={t("devices.ways.directHeadStop")} tone="warn" />}
+        {running ? <SwitchSteps name={name} current={step ?? "checking"} /> : <Picture way={server ? "server" : "direct"} name={name} />}
+      </WayCard>
     </div>
   );
 }
