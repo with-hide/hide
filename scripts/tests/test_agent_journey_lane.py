@@ -182,7 +182,7 @@ class FakeModel(unittest.TestCase):
                         self.assertFalse(lane.judge(value, "fake")[0])
 
     def test_a_run_asked_for_some_agents_stands_for_those_alone(self):
-        # The agent canary reruns only the agents whose latest release failed, at their pins.
+        # A hand run of agent-journey.yml may name the agents it measures.
         value = report({}, [], fake_model=True)
         value["table"] = {"codex": value["table"]["codex"]}
         self.assertEqual(lane.judge(value, "fake", agents=["codex"]), (True, []))

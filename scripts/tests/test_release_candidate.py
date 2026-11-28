@@ -84,11 +84,11 @@ class ReleaseCandidate(unittest.TestCase):
         workflow = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())
         self.assertEqual(set(workflow[True]), {"workflow_dispatch"})
         self.assertEqual(set(workflow[True]["workflow_dispatch"]["inputs"]),
-                         {"public_sha", "tag", "verification_run_id", "build_order", "macos_runner"})
+                         {"public_sha", "tag", "verification_run_id", "build_order", "macos_runner", "allow_red_nightly"})
         for permissions in [workflow["permissions"], *[
             job["permissions"] for job in workflow["jobs"].values() if "permissions" in job
         ]]:
-            self.assertTrue(set(permissions) <= {"contents", "actions"})
+            self.assertTrue(set(permissions) <= {"contents", "actions", "issues"})
             self.assertEqual(set(permissions.values()), {"read"})
         packages = workflow["jobs"]["packages"]
         self.assertFalse(packages["with"]["include-macos"])
