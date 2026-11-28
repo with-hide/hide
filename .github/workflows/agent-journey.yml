@@ -196,7 +196,7 @@ jobs:
     name: agent journey Windows forms
     if: ${{ inputs.stand-ins != false && contains(fromJSON(inputs.systems), 'windows') }}
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -222,7 +222,8 @@ jobs:
         timeout-minutes: 10
         run: python -m unittest scripts/tests/test_agent_live_windows.py -v
       - name: Build the controller's spawn provider
-        timeout-minutes: 1
+        # clang's first start on a fresh runner has taken up to a minute.
+        timeout-minutes: 5
         run: clang -O2 -o "$RUNNER_TEMP/journey-controller.exe" web/e2e/shims/spawn-provider.c
       - name: Check the controller process boundary
         timeout-minutes: 2

@@ -5,7 +5,7 @@ import { threadConversation, threadInputHeld, threadScreen } from "./threadView"
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
 
 function page(texts: string[], parts: ThreadPage["parts"] = {}, sessions: ThreadPage["sessions"] = {}, start = 0): ThreadPage {
-  return { start, updates: texts.map(said), parts, sessions };
+  return { record: "r1", start, updates: texts.map(said), parts, sessions };
 }
 
 function thread(extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
@@ -29,9 +29,9 @@ describe("a thread's conversation", () => {
     const user = (text: string) => ({ sessionUpdate: "user_message_chunk", content: { type: "text", text } });
     // Pages that begin alike, as an agent's todo list starts a page with no message id or time of its own.
     const plan = { sessionUpdate: "plan", entries: [{ content: "단계", priority: "medium", status: "pending" }] };
-    const older = { start: 0, updates: [plan, user("처음 질문"), said("처음 답")], parts: {}, sessions: {} };
-    const kept = { start: 400, updates: [plan, user("둘째 질문"), said("둘째 답")], parts: {}, sessions: {} };
-    const live = { start: 900, updates: [plan, user("지금 질문"), said("지금 답")], parts: {}, sessions: {} };
+    const older = { record: "r1", start: 0, updates: [plan, user("처음 질문"), said("처음 답")], parts: {}, sessions: {} };
+    const kept = { record: "r1", start: 400, updates: [plan, user("둘째 질문"), said("둘째 답")], parts: {}, sessions: {} };
+    const live = { record: "r1", start: 900, updates: [plan, user("지금 질문"), said("지금 답")], parts: {}, sessions: {} };
     const ids = (history: ThreadPage[], tail: ThreadPage | null) => {
       const lines = threadScreen(thread({ tail }), { generation: 2, pages: history }, {}, []).lines;
       return new Map(lines.filter((line) => "text" in line).map((line) => [(line as { text: string }).text, line.id]));
@@ -73,7 +73,7 @@ describe("a thread's screen", () => {
   const plan = { pane_id: "w1:p9" } as PlanView;
   const mission = { id: "mission-3", title: "Desk 1차", status: "running", decision: null, conductor: { present: true }, nodes: [{ key: "done", depends_on: [], status: "done", attention: null }, { key: "working", depends_on: [], status: "working", attention: null }, { key: "dropped", depends_on: [], status: "dropped", attention: null }] } as unknown as Mission;
   const tail: ThreadPage = {
-    start: 0,
+    record: "r1", start: 0,
     updates: [
       { sessionUpdate: "user_message_chunk", content: { type: "text", text: "다음 단계\n둘째 줄" }, _meta: { hide: { origin: "letter", from: "lead" } } },
       call("a", "hide request send agent-7 --intent m:ask"),

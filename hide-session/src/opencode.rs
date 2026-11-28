@@ -353,7 +353,7 @@ pub fn fork_route(accounts: &Accounts, id: &str, cwd: &str) -> Result<ForkRoute,
             prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
             Ok(match schema {
                 Schema::V1 => ForkRoute::Flag,
-                Schema::V2 => ForkRoute::Server,
+                Schema::V2 { .. } => ForkRoute::Server,
             })
         },
     )??)
@@ -397,22 +397,29 @@ pub(crate) fn activity(
     )??)
 }
 
-/// When the session or any of its messages was last written.
+/// When the session or any of its messages was last written: OpenCode 2.4
+/// writes an assistant's items to `session_part` without touching the
+/// message, so a part row's write is one of the session's.
 fn newest_write(
     connection: &Connection,
     schema: Schema,
     id: &str,
     proven: &Proven,
 ) -> Result<u64, String> {
-    let newest: Option<i64> = connection
-        .query_row(
-            &format!(
-                "SELECT max(time_updated) FROM {} WHERE session_id = ?1",
-                schema.messages()
-            ),
-            params![id],
-            |row| row.get(0),
+    let messages = format!(
+        "SELECT max(time_updated) AS newest FROM {} WHERE session_id = ?1",
+        schema.messages()
+    );
+    let newest = if matches!(schema, Schema::V2 { parts: true }) {
+        format!(
+            "SELECT max(newest) FROM ({messages} UNION ALL \
+             SELECT max(time_updated) FROM session_part WHERE session_id = ?1)"
         )
+    } else {
+        messages
+    };
+    let newest: Option<i64> = connection
+        .query_row(&newest, params![id], |row| row.get(0))
         .map_err(|error| refusal(&error))?;
     let newest = newest
         .and_then(|newest| u64::try_from(newest).ok())
@@ -613,7 +620,7 @@ fn first_request(
     schema: Schema,
     id: &str,
 ) -> Result<Option<(String, u64)>, String> {
-    if schema == Schema::V2 {
+    if matches!(schema, Schema::V2 { .. }) {
         return v2::first_request(connection, id);
     }
     connection
@@ -900,7 +907,9 @@ fn read_connection(
         ..
     } = match schema {
         Schema::V1 => walk_v1(connection, session_id, start, proven.created, walk)?,
-        Schema::V2 => v2::walk(connection, session_id, start, proven.created, walk)?,
+        Schema::V2 { parts } => {
+            v2::walk(connection, parts, session_id, start, proven.created, walk)?
+        }
     };
     if let Some(reason) = transcript.turn_error {
         return Err(reason.as_str().to_owned());
@@ -912,7 +921,9 @@ fn read_connection(
         let budget = READ_BUDGET_BYTES.saturating_sub(spent);
         match match schema {
             Schema::V1 => unfinished_questions(connection, message_id, budget, &mut transcript),
-            Schema::V2 => v2::unfinished_questions(connection, message_id, budget, &mut transcript),
+            Schema::V2 { parts } => {
+                v2::unfinished_questions(connection, parts, message_id, budget, &mut transcript)
+            }
         }? {
             None if next == start => {
                 return Err(SkipReason::UserTurnCapacity.as_str().to_owned());

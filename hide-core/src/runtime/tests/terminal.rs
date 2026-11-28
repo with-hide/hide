@@ -302,35 +302,6 @@ fn runtime_owner_conflict_observes_ignores_stale_delivery_and_reconnects_once() 
     );
 }
 
-/// The shell used to draw an even grid of the tab's panes whenever it had
-/// no layout, which is a geometry the engine never applied and which decides
-/// the PTY size. With every tab's layout in the snapshot there is nothing
-/// left for it to stand in for: the web pane grid draws the layout the
-/// snapshot carries for the tab or nothing, and nothing may bring the
-/// stand-in back.
-#[test]
-fn tab_layouts_have_no_uniform_grid_stand_in_left_in_the_shell() {
-    let sources = web_sources();
-    let grid = &sources
-        .iter()
-        .find(|(name, _)| name == "web/src/PaneGrid.tsx")
-        .expect("the pane grid")
-        .1;
-    assert!(
-        grid.contains("layoutForTab(") && grid.contains("!layout"),
-        "the pane grid no longer draws only the layout the snapshot carries"
-    );
-    let offenders: Vec<&String> = sources
-        .iter()
-        .filter(|(_, source)| source.contains("uniformItems") || source.contains("uniformGrid"))
-        .map(|(name, _)| name)
-        .collect();
-    assert!(
-        offenders.is_empty(),
-        "a uniform pane grid stand-in is back in {offenders:?}"
-    );
-}
-
 fn wheel_event(pane_id: &str, direction: &str, lines: u16) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,

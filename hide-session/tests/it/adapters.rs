@@ -1215,7 +1215,7 @@ fn the_doorbells_line_is_never_the_operators_words_and_a_look_alike_instruction_
             assert_eq!(requests, expected, "{agent:?}: {said}");
         }
     }
-    for version in ["opencode-1.18.30", "opencode-2.0.29"] {
+    for version in ["opencode-1.18.30", "opencode-2.0.29", "opencode-2.4.2"] {
         let sql = std::fs::read_to_string(fixtures().join(version).join("opencode.sql")).unwrap();
         assert!(sql.contains(LETTER_JSON), "{version}");
         for (said, operator) in cases {

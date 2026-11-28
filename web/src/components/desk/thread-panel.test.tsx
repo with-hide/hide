@@ -36,7 +36,7 @@ const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content:
 
 function section(extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
   return { generation: 4, state: "ready", pane_id: "w1:p2", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null, queue: null, choice: {},
-    tail: { start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는 끝났어요")], parts: {}, sessions: {} }, ...extra };
+    tail: { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는 끝났어요")], parts: {}, sessions: {} }, ...extra };
 }
 
 // Display snapshots and request completions are separate wire messages.
@@ -455,7 +455,7 @@ it("draws the files a sent message typed before its words over its bubble, by th
   const stage = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
   const typed = `"/Users/me/.hide/state/attachments/${stage}-0-화면 1.png" "C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log" 이것 좀 봐 줘`;
   keepSent(`${stage}-1`, "install.log", null);
-  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: typed } }], parts: {}, sessions: {} } }) }));
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: typed } }], parts: {}, sessions: {} } }) }));
   const sent = container.querySelector("[data-desk-sent-attachments]");
   expect([...sent!.querySelectorAll("[data-desk-attachment]")].map((tile) => tile.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual(["화면 1.png", "install.log"]);
   expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
@@ -466,7 +466,7 @@ it("draws an image the session showed as its tile's picture, made from the file'
   configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
   const { container } = await mount();
   const shown = { sessionUpdate: "tool_call", toolCallId: "f", kind: "execute", title: "hide file open /repo/shots/dark.png", status: "completed" };
-  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { start: 0, updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { record: "r1", start: 0, updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
   const answer = async (read: Record<string, unknown>, bytes: number[], total: number) => {
     const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: read.request_id, path: "/repo/shots/dark.png", offset: 0, total, eof: true }));
     const frame = new Uint8Array(4 + header.length + bytes.length);
@@ -489,7 +489,7 @@ it("draws an image the session showed as its tile's picture, made from the file'
 it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
   const { container } = await mount();
   const interrupted = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "[Request interrupted by user]" }, _meta: { hide: { origin: "interrupted" } } };
-  const tail = { start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는"), interrupted], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는"), interrupted], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
   const line = container.querySelector('[data-desk-thread-line="interrupted"]');
   expect(line?.textContent).toBe("Interrupted");
@@ -507,7 +507,7 @@ const shown = async (tail: ThreadPage) => act(async () => useShellStore.setState
 it("draws what one turn leads to once per target, with its newest state, and a mission chip without its title beside it", async () => {
   const { container } = await mount({ ...job, state: "done" });
   await shown({
-    start: 0, updates: [
+    record: "r1", start: 0, updates: [
       operator("미션 돌려줘"),
       shell("m1", "hide mission show --mission mission-3"),
       shell("l1", "hide request send agent-7 --body 첫 편지"),
@@ -547,7 +547,7 @@ it("draws what one turn leads to once per target, with its newest state, and a m
 it("folds a running turn's calls into one line with its newest call under it, never what came out, and unfolds every call", async () => {
   const { container } = await mount();
   const tail = (newest: object[]) => ({
-    start: 0, updates: [
+    record: "r1", start: 0, updates: [
       operator("칩을 고쳐줘"),
       said("먼저 칩을 고칠게요."),
       shell("r0", "rg -n mission web/src"),
@@ -588,7 +588,7 @@ it("folds a running turn's calls into one line with its newest call under it, ne
 it("tells parts apart by what they lead to, not by how they are drawn or typed", async () => {
   const { container } = await mount({ ...job, state: "done" });
   await shown({
-    start: 0, updates: [
+    record: "r1", start: 0, updates: [
       operator("둘 다 리뷰 맡기고 노트 열어줘"),
       shell("s1", "hide agent spawn --name review"),
       shell("s2", "hide agent spawn --name review"),
@@ -611,7 +611,7 @@ it("tells parts apart by what they lead to, not by how they are drawn or typed",
 
 it("names a running turn's newest call whatever it was: a Hide call by its command, a search by its term", async () => {
   const { container } = await mount();
-  const running = (calls: object[], parts: ThreadPage["parts"] = {}) => shown({ start: 0, updates: [operator("찾아줘"), ...calls], parts, sessions: {} } as ThreadPage);
+  const running = (calls: object[], parts: ThreadPage["parts"] = {}) => shown({ record: "r1", start: 0, updates: [operator("찾아줘"), ...calls], parts, sessions: {} } as ThreadPage);
   // A call drawn as a Hide part is still the newest step, as the command it was.
   await running([shell("r", "rg old-step"), shell("m", "hide mission show --mission mission-3")], { m: { kind: "mission", mission: "mission-3" } });
   expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("hide mission show --mission mission-3");
@@ -634,7 +634,7 @@ it("names a running turn's newest call whatever it was: a Hide call by its comma
 
 it("folds a finished turn under 작업 · 파일 n · 명령 m with no newest call", async () => {
   const { container } = await mount({ ...job, state: "done" });
-  await shown({ start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
+  await shown({ record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
   expect(container.querySelector("[data-desk-turn-toggle]")?.textContent).toBe("Work · 1 file · 1 command");
   expect(container.querySelector("[data-desk-thread-newest]")).toBeNull();
   expect(container.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(0);
@@ -647,7 +647,7 @@ it("draws the agent's words as Markdown, copies a code block's code, and offers 
   const copied: [string, string][] = [];
   const { container } = await mount(job, null, { onCopy: async (text, what) => { copied.push([text, what]); return true; } });
   const words = "**라이트**는 끝났어요.\n\n```\nopen https://play.google.com/console\n```";
-  const tail = { start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said(words)], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said(words)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
   await codeCopyDrawn(container);
   const message = container.querySelector('[data-desk-thread-line="agent"]')!;
@@ -664,7 +664,7 @@ it("keeps every message's view while the operator types and while the last messa
   // Mounted as Desk mounts it: no mentions passed.
   const { container, type } = await mount();
   const answer = (id: string, text: string) => ({ sessionUpdate: "agent_message_chunk", messageId: id, content: { type: "text", text } });
-  const turns = (last: string) => ({ start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "첫 질문" } }, answer("a", "첫 **답**"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "둘째 질문" } }, answer("b", last)], parts: {}, sessions: {} });
+  const turns = (last: string) => ({ record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "첫 질문" } }, answer("a", "첫 **답**"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "둘째 질문" } }, answer("b", last)], parts: {}, sessions: {} });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: turns("쓰는 중") }), sessionThreadHistory: { generation: 4, pages: [] } }));
   const views = () => Array.from(container.querySelectorAll('[data-desk-thread-line="agent"] .cm-editor'));
   const [first, second] = views();
@@ -678,7 +678,7 @@ it("keeps every message's view while the operator types and while the last messa
 });
 
 const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
-const asked = (...updates: ThreadPage["updates"]) => ({ start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
+const asked = (...updates: ThreadPage["updates"]) => ({ record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
 
 it("draws only the rows near the viewport, one long turn's messages each a row of its own, and draws a row again on return", async () => {
   layOut({ viewport: 400, row: 100 });
@@ -715,7 +715,7 @@ it("keeps a turn's unfolded work while its rows leave the viewport and come back
   layOut({ viewport: 400, row: 100 });
   const { container } = await mount({ ...job, state: "done" });
   const later = Array.from({ length: 20 }, (_, index) => [operator(`later ${index}`), said(`later answer ${index}`)]).flat();
-  await shown({ start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요"), ...later], parts: {}, sessions: {} });
+  await shown({ record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요"), ...later], parts: {}, sessions: {} });
   await scrollConversation(container, 0);
   await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
   expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("open");
@@ -729,8 +729,8 @@ it("keeps a turn's unfolded work while its rows leave the viewport and come back
 
 it("forgets the fold of a turn whose page was let go, so the same turn read again starts folded", async () => {
   const { container } = await mount({ ...job, state: "done" });
-  const older = { start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요")], parts: {}, sessions: {} };
-  const tail = { start: 500, updates: [operator("다음"), said("했어요")], parts: {}, sessions: {} };
+  const older = { record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요")], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 500, updates: [operator("다음"), said("했어요")], parts: {}, sessions: {} };
   const read = (pages: ThreadPage[]) => act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages } }));
   await read([older]);
   await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
@@ -741,10 +741,22 @@ it("forgets the fold of a turn whose page was let go, so the same turn read agai
   expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("folded");
 });
 
+it("starts a record replaced at the same path with fresh rows, none of the old record's folds on them", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  const page = (record: string, task: string, command: string) => ({ record, start: 0, updates: [operator(task), shell("c1", command), said(`${task} 했어요`)], parts: {}, sessions: {} });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: page("r1", "고쳐줘", "rg -n old-record") }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
+  expect(drawnWords(container).some((words) => words.includes("rg -n old-record"))).toBe(true);
+  // The agent's record was replaced: the core reads the new file from its start, in the same thread, with no empty frame between.
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: page("r2", "다른 일", "rg -n new-record") }) }));
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("folded");
+  expect(drawnWords(container).some((words) => words.includes("rg -n new-record"))).toBe(false);
+});
+
 it("reads a page in above without moving the row the operator reads", async () => {
   layOut({ viewport: 400, row: 40 });
   const { container } = await mount({ ...job, state: "done" });
-  const pageOf = (from: number) => ({ start: from * 100, updates: Array.from({ length: 20 }, (_, index) => [operator(`question ${from + index}`), said(`answer ${from + index}`)]).flat(), parts: {}, sessions: {} });
+  const pageOf = (from: number) => ({ record: "r1", start: from * 100, updates: Array.from({ length: 20 }, (_, index) => [operator(`question ${from + index}`), said(`answer ${from + index}`)]).flat(), parts: {}, sessions: {} });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: pageOf(20), has_older: true }), sessionThreadHistory: { generation: 4, pages: [] } }));
   await scrollConversation(container, 600);
   const box = container.querySelector<HTMLElement>("[data-desk-thread-conversation]")!;
@@ -763,7 +775,7 @@ it("keeps the row being read in place when a row above it grows, while the reade
   const heights = new Map<string, number>();
   layOut({ viewport: 400, row: (row) => heights.get(row.dataset.threadRow!) ?? 40 });
   const { container } = await mount({ ...job, state: "done" });
-  await shown({ start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
+  await shown({ record: "r1", start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
   await laidOut();
   const box = container.querySelector<HTMLElement>("[data-desk-thread-conversation]")!;
   const heightOf = (row: HTMLElement) => heights.get(row.dataset.threadRow!) ?? 40;
@@ -793,7 +805,7 @@ it("draws the message a question goes to wherever it stands, keeps it drawn whil
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
   const { container } = await mount({ ...job, state: "done" }, null, { asks: [{ id: "far-0", text: "어느 화면을 찍을지", at_unix_ms: 1_500, quote: "어느 화면을 찍을까요?" }] });
   const later = Array.from({ length: 30 }, (_, index) => [operator(`later ${index}`), answer(`later answer ${index}`, 2_000 + index)]).flat();
-  await shown({ start: 0, updates: [operator("찍어줘"), answer("어느 화면을 찍을까요? 라이트와 다크가 있어요.", 1_000), ...later], parts: {}, sessions: {} });
+  await shown({ record: "r1", start: 0, updates: [operator("찍어줘"), answer("어느 화면을 찍을까요? 라이트와 다크가 있어요.", 1_000), ...later], parts: {}, sessions: {} });
   const asking = () => drawnWords(container).some((words) => words.includes("어느 화면을 찍을까요?"));
   expect(asking()).toBe(false);
   vi.useFakeTimers();
@@ -812,7 +824,7 @@ it("draws the message a question goes to wherever it stands, keeps it drawn whil
 it("keeps every row between a selection's ends drawn while it stands, so a copy holds all of it", async () => {
   layOut({ viewport: 400, row: 100 });
   const { container } = await mount({ ...job, state: "done" });
-  await shown({ start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
+  await shown({ record: "r1", start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
   await scrollConversation(container, 0);
   const start = drawnRows(container).find((row) => row.textContent?.includes("answer 1"))!;
   const select = (to: Node | null) => act(async () => {
@@ -835,7 +847,7 @@ it("keeps every row between a selection's ends drawn while it stands, so a copy 
 
 it("leaves a press on a message's words to the browser, so a drag can select across messages, and a code block's 복사 still takes its press", async () => {
   const { container } = await mount({ ...job, state: "done" });
-  await shown({ start: 0, updates: [operator("보여줘"), said("첫 답이에요"), operator("코드도"), said("이 코드예요\n\n```\nconst a = 1;\n```")], parts: {}, sessions: {} });
+  await shown({ record: "r1", start: 0, updates: [operator("보여줘"), said("첫 답이에요"), operator("코드도"), said("이 코드예요\n\n```\nconst a = 1;\n```")], parts: {}, sessions: {} });
   await codeCopyDrawn(container);
   const reached: EventTarget[] = [];
   const seen = (event: Event) => reached.push(event.target!);
@@ -1038,7 +1050,7 @@ it("draws a code block under a head row with its language and 복사, the code b
   const copied: string[] = [];
   const { container } = await mount(job, null, { onCopy: async (text) => { copied.push(text); return true; } });
   const words = "한 줄:\n\n```\nopen https://play.google.com/console\n```\n\n여러 줄:\n\n```bash\npnpm --dir web install\npnpm --dir web build\n```\n\n> 인용 안:\n> ```sh\n> echo hi\n> ```";
-  const tail = { start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "알려 줘" } }, said(words)], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "알려 줘" } }, said(words)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
   await act(() => vi.waitFor(() => expect(container.querySelectorAll("[data-code-block-head]")).toHaveLength(3)));
   const [one, several] = Array.from(container.querySelectorAll<HTMLElement>("[data-code-block]"));
