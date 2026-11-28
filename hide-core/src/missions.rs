@@ -4504,43 +4504,58 @@ pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
 /// Whether a declared path names documents only: a `*.md` or `*.pen` file
 /// or the site under `site/`. Documents merge once with main right before
 /// the merge (AGENTS.md, Working Beside Open Pull Requests), so they order
-/// no nodes and are no overlap. A file's kind reads its extension in any case.
+/// no nodes and are no overlap. It reads a [`path_key`], in lower case.
 fn document_path(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".pen") || key == "site" || key.starts_with("site/")
+    key.ends_with(".md") || key.ends_with(".pen") || key == "site" || key.starts_with("site/")
 }
 
 /// A path a node of the mission in `project` declares, in the one spelling
 /// both path rules compare: below the project, names joined by `/` (a Windows
 /// `\` too), no empty or `.` names, and a `..` taking the name before it, so
 /// `./web/src/`, `web\src` and `docs/../web/src` are all `web/src`. An
-/// absolute path inside the project is read below it
-/// (`hide_platform::path::wire_relative`); one outside it keeps its leading
-/// `/`, so it never meets a path of the project. Names keep their case, as
-/// Git, where the two changes meet, keeps them. The plan keeps the path as it
-/// was written; only the comparison reads this.
+/// absolute path keeps the root it starts from (`/`, a share's `//server/share`
+/// or a drive's `C:`), which no `..` climbs above, and is read below the
+/// project when it is inside it (`hide_platform::path::wire_relative`); one
+/// outside it keeps a leading `/`, so it never meets a path of the project.
+/// Letters compare in lower case: whether the project's volume tells
+/// `Web/src` from `web/src` is known only on its machine, and taking them as
+/// one path can only order two nodes that did not need it, never let two
+/// meet at the merge. The plan keeps the path as it was written; only the
+/// comparison reads this.
 fn path_key(project: &str, path: &str) -> String {
-    let path = path.replace('\\', "/");
+    let path = path.replace('\\', "/").to_lowercase();
+    let absolute = hide_platform::path::is_wire_absolute(&path);
+    let (root, rest) = if let Some(rest) = path.strip_prefix("//") {
+        ("//", rest)
+    } else if let Some(rest) = path.strip_prefix('/') {
+        ("/", rest)
+    } else {
+        ("", path.as_str())
+    };
+    // The names an absolute path's root holds: a share's server and share,
+    // a drive's letter.
+    let floor = match root {
+        "//" => 2,
+        "" if absolute => 1,
+        _ => 0,
+    };
     let mut names: Vec<&str> = Vec::new();
-    for name in path.split('/') {
+    for name in rest.split('/') {
         match name {
             "" | "." => {}
-            ".." if names.last().is_some_and(|last| *last != "..") => {
+            ".." if names.len() > floor && names.last().is_some_and(|last| *last != "..") => {
                 names.pop();
             }
+            ".." if absolute => {}
             name => names.push(name),
         }
     }
     let key = names.join("/");
-    if !hide_platform::path::is_wire_absolute(&path) {
+    if !absolute {
         return key;
     }
-    let spelled = if path.starts_with('/') {
-        format!("/{key}")
-    } else {
-        key
-    };
-    match hide_platform::path::wire_relative(project, &spelled) {
+    let spelled = format!("{root}{key}");
+    match hide_platform::path::wire_relative(&project.replace('\\', "/").to_lowercase(), &spelled) {
         Ok(below) => below.into_string(),
         Err(_) if spelled.starts_with('/') => spelled,
         Err(_) => format!("/{spelled}"),
@@ -6128,6 +6143,11 @@ pub(crate) mod tests {
             ("docs/../web/src", "web/src/App.tsx"),
             ("/repo/web/src/", "web/src/App.tsx"),
             (".", "hided/src/main.rs"),
+            // Whether the volume tells case apart is known only on the
+            // project's machine, so another case is taken as the same path.
+            ("Web/src", "web/src/App.tsx"),
+            ("src/A.rs", "src/a.rs"),
+            ("/REPO/web", "web/src"),
         ] {
             let refused = planned(&two_on_paths(&[a], &[b], &[], Vec::new())).unwrap_err();
             assert_eq!(
@@ -6136,10 +6156,9 @@ pub(crate) mod tests {
                 "{a} and {b}"
             );
         }
-        // Names keep their case, as Git keeps them; a path above the project
-        // or another folder's absolute path is not one of the project's.
+        // A path above the project or another folder's absolute path is not
+        // one of the project's.
         for (a, b) in [
-            ("src/A.rs", "src/a.rs"),
             ("../web/src", "web/src"),
             ("/elsewhere/web/src", "web/src"),
             ("/repo-other/web", "web"),
@@ -6166,6 +6185,52 @@ pub(crate) mod tests {
         general.nodes[1].kind = NodeKind::General.into();
         general.nodes[1].delivery = None;
         assert!(planned(&general).is_ok());
+    }
+
+    #[test]
+    fn an_absolute_path_on_a_windows_share_or_drive_is_read_below_its_project() {
+        let refused = |project: &str, a: &str, b: &str| {
+            let mut on = mission();
+            on.project = project.into();
+            apply_plan(
+                &on,
+                &two_on_paths(&[a], &[b], &[], Vec::new()),
+                2,
+                InterfaceLanguage::Korean,
+            )
+            .err()
+            .map(|refused| crate::coordination::split_refusal(&refused).0.to_owned())
+        };
+        let unordered = Some("mission_paths_unordered".to_owned());
+        for (project, a) in [
+            ("//server/share/repo", "\\\\server\\share\\repo\\web\\src"),
+            ("//server/share/repo", "//server/share/repo/web/src"),
+            ("//server/share/repo", "//server/share/repo/../repo/web/src"),
+            ("C:/work/repo", "c:\\work\\repo\\web\\src"),
+            ("C:/work/repo", "C:/work/repo/web/src/"),
+        ] {
+            assert_eq!(
+                refused(project, a, "web/src/App.tsx"),
+                unordered,
+                "{project}: {a}"
+            );
+        }
+        // A `..` does not climb above the share or the drive, and another
+        // share or drive is outside the project.
+        for (project, a) in [
+            (
+                "//server/share/repo",
+                "//server/share/../other/repo/web/src",
+            ),
+            ("//server/share/repo", "//server/other/repo/web/src"),
+            ("C:/work/repo", "D:/work/repo/web/src"),
+        ] {
+            assert_eq!(
+                refused(project, a, "web/src/App.tsx"),
+                None,
+                "{project}: {a}"
+            );
+        }
     }
 
     #[test]
