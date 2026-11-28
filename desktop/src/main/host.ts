@@ -1614,7 +1614,12 @@ export class DesktopHost {
       }
     });
     this.browsers?.attach(window);
-    window.once("ready-to-show", () => this.present(window, false));
+    window.once("ready-to-show", () => {
+      this.present(window, false);
+      // The end of every launch, and of an update's reopen, which no one
+      // watches: a window that never shows is otherwise silent.
+      this.log.event("window.shown", { visible: window.isVisible() });
+    });
     window.on("close", () => {
       try {
         writeWindowState(file, window.getNormalBounds());

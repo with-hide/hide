@@ -107,7 +107,8 @@ function appProcesses(app: string): AppProcess[] {
 
 /**
  * The events the new version's host logged since `since`, from its own
- * `host.start`: empty until a host of `version` starts. The new version
+ * `host.start`: empty until a host of `version` starts, and its window is
+ * shown once `window.shown visible=true` is among them. The new version
  * writes to the profile its environment names. On Linux Electron's
  * relauncher starts it with the old app's environment, the test's; on
  * Windows the installer has Explorer start it, with the account's own
@@ -119,7 +120,7 @@ function reopenedEvents(env: Record<string, string>, since: string, version: str
   for (const profile of [env, ...account]) {
     const logged = hostLog(profile).filter((line) => String(line.ts) >= since);
     const start = logged.findIndex((line) => line.event === "host.start" && line.version === version);
-    if (start >= 0) return logged.slice(start).map((line) => line.event);
+    if (start >= 0) return logged.slice(start).map((line) => (line.event === "window.shown" ? `window.shown visible=${String(line.visible)}` : line.event));
   }
   return [];
 }
@@ -235,15 +236,15 @@ test("the installed app updates to the next version and the panes and daemon kee
     // The installer of N+1 replaced N (B16) and nothing the core runs ended (D-19).
     await expect.poll(installedVersion, { timeout: 180_000, intervals: [1_000] }).toBe(next);
     // Restart opens the new version once it is installed (B16): its host
-    // starts and makes its window. It is not the app this test launched: on
+    // starts and shows its window. It is not the app this test launched: on
     // Windows the installer has Explorer start it (electron-builder's NSIS
     // `StartApp`), and Explorer does so on its own time, sometimes after the
     // installer has exited; on Linux Electron's relauncher starts it once the
     // old app has exited. It is ended below only once it is there, or it
     // would start after the end and stay.
     await expect.poll(() => reopenedEvents(run.env, restarted, next), {
-      message: `hide ${next} opened its window after the update`, timeout: 60_000, intervals: [1_000], // wait-ok: the update starts the new version
-    }).toEqual(expect.arrayContaining(["host.start", "window.bounds"]));
+      message: `hide ${next} showed its window after the update`, timeout: 60_000, intervals: [1_000], // wait-ok: the update starts the new version
+    }).toEqual(expect.arrayContaining(["host.start", "window.shown visible=true"]));
     expect(run.daemonPid()).toBe(daemon);
     expect(await panesNow()).toBe(panes);
     expect(hostLog(run.env).map((line) => line.event)).toContain("update.install");
