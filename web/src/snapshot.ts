@@ -4032,6 +4032,8 @@ export type SessionWorkSearch = { query: string; options?: SessionSearchOptions;
 export type SleepingSession = {
   sleep_id: string;
   node_id: string;
+  /** The agent's own conversation id the sleep keeps; absent from a core before it was sent. */
+  session_id?: string;
   checkout_path: string;
   kind: string;
   identity_label: string;

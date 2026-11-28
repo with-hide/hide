@@ -615,8 +615,8 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
  * the box that types into its terminal. Its state is in the head, said once.
  * A record that cannot be read says why in one line and offers the
  * terminal; one being read, or with nothing in it yet, says so in one quiet
- * line. A session asleep with no card any more (its sleep closed its pane,
- * B43) keeps its record above the foot that wakes it.
+ * line. A session asleep has no box (`composer` null): its caller dims the
+ * record and wakes it from the sleep card over it.
  */
 export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, olderLeft = false, scrollKey = null, ...actions }: {
   job: DeskJob | null;
@@ -633,16 +633,17 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   /**
    * The input box: its words and files, the `/` and `@` menus Desk's composer has (`useComposerMenus`), and the bar
    * under it (`SessionAgentBar`); over it the pane's waiting line (`queue`, PRD desk-queue D-05), and with `onStop`
-   * ■ stands in send's place while the agent works, ↵ still sending (B10).
+   * ■ stands in send's place while the agent works, ↵ still sending (B10). Null while the session sleeps: nothing is
+   * typed into it until it is awake.
    */
-  composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; textRef?: Ref<HTMLTextAreaElement>; menus?: ComposerMenus; bar?: ReactNode; queue?: ReactNode; onStop?: () => void; onChange: (value: string, caret: number) => void; onCaret?: (caret: number) => void; onSend: () => void };
+  composer: null | { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; textRef?: Ref<HTMLTextAreaElement>; menus?: ComposerMenus; bar?: ReactNode; queue?: ReactNode; onStop?: () => void; onChange: (value: string, caret: number) => void; onCaret?: (caret: number) => void; onSend: () => void };
   /** What the agent's own screen asks, at the conversation's end, answered in place (the choice card, PRD desk-2-ui B14). */
   ask?: ReactNode;
   /** The questions Hide found that still wait on the operator, oldest first (`open_asks`, the list 내 차례 reads). */
   asks?: readonly AskLine[];
   /** 무시하기 and 되돌리기 on one of `asks`, as 내 차례 does it for the session; a view without it (an ended session's record) draws no question line. */
   onAsk?: (id: string, status: "open" | "dismissed") => void;
-  /** Drawn in the input box's place, as a sleeping session's wake line is (B43). */
+  /** Drawn in the input box's place, as an ended session's `이어서 하기` is. */
   foot?: ReactNode;
   /** The session's terminal, which a record it cannot read points to; none for a session whose pane is gone. */
   onTerminal?: () => void;
@@ -783,7 +784,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
         )}
       </div>
       {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.id ?? lit?.ask ?? null} gone={gone} /> : null}
-      {foot ?? (
+      {foot ?? (composer ? (
         <div className="flex shrink-0 flex-col gap-xs px-sm pb-sm">
           {composer.queue}
           <DeskComposer
@@ -810,7 +811,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
             {composer.bar}
           </DeskComposer>
         </div>
-      )}
+      ) : null)}
     </div>
   );
 }

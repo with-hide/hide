@@ -9,7 +9,9 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
 import { fileWords, keepSent, mentionAt, pickCommand, pickWords, useComposerTray } from "../../deskComposer";
 import { sessionBarSlots, sessionMentions, sessionWords, switchCommand, useMentionFiles } from "../../sessionInput";
-import { checkoutOfPane, type DeskAgentId } from "../../snapshot";
+import { checkoutOfPane, type DeskAgentId, type SleepingSession } from "../../snapshot";
+import { conversationSleep } from "../../sleep";
+import { SleepCard } from "../sleep-card";
 import { useSessionThread } from "../../sessionThread";
 import { sessionDraft, visitSessionTerminal } from "../../sessionDrafts";
 import { remoteTargetOfPane } from "../../remote";
@@ -40,17 +42,19 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * on, reads the page before when the conversation is scrolled to its top,
  * and types the input box's words and files into that pane. The box has
  * Desk's `/` and `@` menus and, under it, the session's model and effort
- * with its agent fixed (mission-106). Its head (with
- * the outputs shelf under it), the agent's choice card, the questions Hide
- * found and what stands in the box's place while it sleeps are the caller's.
+ * with its agent fixed (mission-106). While the session sleeps the
+ * conversation stays readable, dimmed, with the sleep card in its middle
+ * and no box (`conversationSleep`, `SleepCard`). Its head (with the outputs
+ * shelf under it), the agent's choice card, the questions Hide found and
+ * what stands in an ended session's box's place are the caller's.
  */
-export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
+export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, ask = null, asks, onAsk, foot = null, asleep = null, onSessionWake, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   paneConversation?: boolean;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
-  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck" | "inputQueue" | "interruptThread">;
+  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck" | "inputQueue" | "interruptThread" | "wakeAgent" | "wakeSleepingSession">;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
@@ -65,6 +69,10 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   /** 무시하기 and 되돌리기 on one of `asks`, for the session they wait in; without it no question line is drawn. */
   onAsk?: (id: string, status: "open" | "dismissed") => void;
   foot?: ReactNode;
+  /** The sleeping session this one is while its sleep closed its pane (Pi, OpenCode, omp), which wakes in a new pane; read only while the pane has no agent row. */
+  asleep?: SleepingSession | null;
+  /** Its wake was asked for, so the caller can follow the new pane. */
+  onSessionWake?: () => void;
   /** The session's terminal; none for a session whose pane is gone. */
   onTerminal?: () => void;
 } & ThreadPartActions) {
@@ -153,6 +161,8 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   // The `/` and `@` menus Desk's composer has: the session's agent's own commands, and the session's project's
   // files above Desk's sessions. A pick is written as the agent reads it in its terminal.
   const row = rows.find((one) => one.pane_id === paneId);
+  // Asleep: the conversation stays to read, dimmed, and the card in its middle wakes it; nothing is typed into it.
+  const sleep = paneId ? conversationSleep(paneId, { row: row ?? null, job, session: asleep }, actions, onSessionWake) : null;
   const kind = row?.agent_kind ?? null;
   const adapter = kind ? agentAdapter(kind) : undefined;
   const commandSection = useShellStore((s) => s.deskCommands);
@@ -239,7 +249,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
       onAction={(action, id) => actions.inputQueue(paneId, action, id)}
     />
   ) : null;
-  const bar = adapter && slots && !foot ? (
+  const bar = adapter && slots && !foot && !sleep ? (
     <SessionAgentBar
       agent={{ kind: adapter.agent_cli, label: adapter.picker_label }}
       model={slots.model}
@@ -268,7 +278,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   // A `답하기` press names the session it was pressed for, and that session's box takes the keyboard once it stands,
   // whether the session was open at the press or opened because of it (its card and record may still be on their way).
   const root = useRef<HTMLDivElement>(null);
-  const boxStands = paneId !== null && !foot && !taken;
+  const boxStands = paneId !== null && !foot && !sleep && !taken;
   useEffect(() => {
     if (!answer || !boxStands) return;
     const input = root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]");
@@ -289,9 +299,10 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   }
   return (
     // The whole panel, its head, conversation and box, takes a dropped file into the box while the box stands (Doop L 나).
-    <FileDropZone ref={root} tray={foot || taken ? null : tray} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
+    <FileDropZone ref={root} tray={foot || sleep || taken ? null : tray} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
       {head}
-      <div inert={taken} className={`flex min-h-0 min-w-0 flex-1 flex-col ${taken || thread?.connected === false ? "opacity-(--opacity-disabled)" : ""}`} data-thread-taken={taken ? "true" : "false"}>
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div inert={taken} className={`flex min-h-0 min-w-0 flex-1 flex-col ${taken || thread?.connected === false ? "opacity-(--opacity-disabled)" : sleep ? "opacity-(--opacity-dimmed)" : ""}`} data-thread-taken={taken ? "true" : "false"} data-thread-asleep={sleep ? "true" : undefined}>
       <ThreadView
         key={paneId ?? ""}
         scrollKey={paneId ? `thread:${paneId}` : null}
@@ -306,7 +317,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
         asks={asks}
         onAsk={onAsk}
         foot={foot}
-        composer={{
+        composer={sleep ? null : {
           value: text,
           tray,
           focused,
@@ -330,6 +341,15 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
         {...parts}
       />
       {uncertain && toTerminal ? <div className="px-md pb-md"><Button variant="text-link" size="inline" onClick={toTerminal}>{t("desk.thread.toTerminal")}</Button></div> : null}
+      </div>
+      {/* The card stands over the conversation's middle and takes only its own presses: around it the record still
+          scrolls, reads the pages before, selects and copies. It stands clear of the window's foot, where the corner's
+          notices sit, so it holds no notice floor as the box it replaces did. */}
+      {sleep && paneId && !taken ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-md" data-thread-sleep-card="true">
+          <SleepCard paneId={paneId} view={sleep} className="pointer-events-auto max-w-full rounded-lg bg-popover px-lg py-md text-popover-foreground shadow-overlay" />
+        </div>
+      ) : null}
       </div>
       {taken ? <div className="absolute inset-0 flex items-center justify-center p-md">
         <Hint label={t("panes.conversation.onePlace")}>
