@@ -807,13 +807,8 @@ fn add_alias(
     } else {
         None
     };
-    let state = looked
-        .as_ref()
-        .and_then(|looked| looked["looked"]["state"].as_str());
-    let leaves = looked.as_ref().and_then(|looked| looked["leaves"].as_str());
-    let over_ssh = "Adding it as an SSH device.";
-    match (state, leaves) {
-        (Some("ready"), _) => {
+    match alias_way(alias, looked.as_ref()) {
+        AliasWay::Pair => {
             let answer =
                 crate::workspace_cli::pairing_ask(env, json!({"verb":"pair_ssh","alias":alias}))
                     .map_err(Refused::Unreachable)?;
@@ -837,7 +832,7 @@ fn add_alias(
                 ),
             ));
         }
-        (Some("absent"), None) => {
+        AliasWay::Server => {
             let name = match command {
                 DeviceCommand::Add { name, .. } => name.clone(),
                 _ => None,
@@ -850,20 +845,8 @@ fn add_alias(
                 .map_err(Refused::Unreachable)?;
             return switched(alias, answer);
         }
-        (Some("absent"), Some(code)) => eprintln!("{} {over_ssh}", leaves_line(alias, code)),
-        (Some("update_there"), _) => eprintln!(
-            "Hide on {alias} is too old to connect as a Hide: update it there to connect that way. {over_ssh}"
-        ),
-        (Some("refused"), _) => eprintln!(
-            "Hide on {alias} refused the request that came over SSH (this machine's diagnostic log names its reason): connecting as a Hide needs it to answer. {over_ssh}"
-        ),
-        (Some("not_running"), _) => eprintln!(
-            "Hide is installed on {alias} and is not running: log in there and open Hide to connect as a Hide. {over_ssh}"
-        ),
-        (Some("not_reached"), _) => eprintln!(
-            "SSH could not sign in to {alias} without asking (a password, a passphrase or a key's touch) or did not reach it, so it cannot be connected as a server. {over_ssh}"
-        ),
-        _ => {}
+        AliasWay::OverSsh(Some(line)) => eprintln!("{line} Adding it as an SSH device."),
+        AliasWay::OverSsh(None) => {}
     }
     // Nothing was read there: the line says how an SSH device becomes its
     // machine's own Hide, only when the operator asks for it.
@@ -876,6 +859,41 @@ fn add_alias(
         )),
         printed => Ok(printed),
     }
+}
+
+/// How `hide device add <alias>` adds a Host, by what the daemon's look at
+/// it answered (none when it was not asked, from a Hide pane): pairs with the
+/// Hide it runs, starts one there as a server, or adds it over SSH with the
+/// line of why it is not a server (none when nothing was read).
+#[derive(Debug, PartialEq, Eq)]
+enum AliasWay {
+    Pair,
+    Server,
+    OverSsh(Option<String>),
+}
+
+fn alias_way(alias: &str, looked: Option<&Value>) -> AliasWay {
+    let state = looked.and_then(|looked| looked["looked"]["state"].as_str());
+    let leaves = looked.and_then(|looked| looked["leaves"].as_str());
+    let line = match (state, leaves) {
+        (Some("ready"), _) => return AliasWay::Pair,
+        (Some("absent"), None) => return AliasWay::Server,
+        (Some("absent"), Some(code)) => leaves_line(alias, code),
+        (Some("update_there"), _) => format!(
+            "Hide on {alias} is too old to connect as a Hide: update it there to connect that way."
+        ),
+        (Some("refused"), _) => format!(
+            "Hide on {alias} refused the request that came over SSH (this machine's diagnostic log names its reason): connecting as a Hide needs it to answer."
+        ),
+        (Some("not_running"), _) => format!(
+            "Hide is installed on {alias} and is not running: log in there and open Hide to connect as a Hide."
+        ),
+        (Some("not_reached"), _) => format!(
+            "SSH could not sign in to {alias} without asking (a password, a passphrase or a key's touch) or did not reach it, so it cannot be connected as a server."
+        ),
+        _ => return AliasWay::OverSsh(None),
+    };
+    AliasWay::OverSsh(Some(line))
 }
 
 /// Why a machine with no Hide of its own is not connected as a server, by
@@ -1790,6 +1808,33 @@ mod tests {
         assert!(parse_words(&["add", "hide://pair#x", "--ssh"]).is_err());
         assert!(parse_words(&["add", "studio", "--ssh", "--ssh"]).is_err());
         assert!(parse_words(&["list", "--ssh"]).is_err());
+    }
+
+    /// The default of `hide device add <alias>` (operator decision
+    /// 2026-11-28): a Host whose look found no Hide and nothing the switch
+    /// rule leaves is added as a server, one running Hide is paired, any
+    /// other is added over SSH with the line of why, and one not looked at
+    /// (from a Hide pane) is added over SSH as before.
+    #[test]
+    fn an_alias_is_added_as_a_server_only_when_its_look_found_a_machine_that_takes_hide() {
+        let look = |state: &str, leaves: Option<&str>| json!({"alias": "box", "looked": {"state": state}, "system": "linux", "leaves": leaves});
+        assert_eq!(
+            alias_way("box", Some(&look("absent", None))),
+            AliasWay::Server
+        );
+        assert_eq!(alias_way("box", Some(&look("ready", None))), AliasWay::Pair);
+        assert_eq!(alias_way("box", None), AliasWay::OverSsh(None));
+        assert_eq!(
+            alias_way("box", Some(&look("absent", Some("windows")))),
+            AliasWay::OverSsh(Some(leaves_line("box", "windows")))
+        );
+        for state in ["not_reached", "update_there", "refused", "not_running"] {
+            let way = alias_way("box", Some(&look(state, None)));
+            assert!(
+                matches!(&way, AliasWay::OverSsh(Some(line)) if line.contains("box")),
+                "{state}: {way:?}"
+            );
+        }
     }
 
     /// The operator's decision of 2026-11-24: a device that moved to its
