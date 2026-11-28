@@ -1266,10 +1266,7 @@ mod part_rows {
     fn a_part_table_missing_a_column_hide_reads_is_refused_rather_than_read_without_parts() {
         let home = home();
         writer(home.path())
-            .execute_batch(
-                "DROP INDEX session_part_session_message_idx; \
-                 ALTER TABLE session_part DROP COLUMN session_id;",
-            )
+            .execute_batch("ALTER TABLE session_part DROP COLUMN time_updated;")
             .unwrap();
         assert_eq!(
             read_root(home.path()).unwrap_err(),
