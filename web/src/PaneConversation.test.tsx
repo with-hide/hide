@@ -42,7 +42,7 @@ afterEach(async () => {
 
 const section: SessionThreadSection = {
   generation: 1, state: "ready", pane_id: "w1:p2", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null, queue: null, choice: {},
-  tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "그 e2e도 봐 줘" } }, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "상태를 기다리게 바꾸는 중이에요" } }], parts: {}, sessions: {} },
+  tail: { start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "그 e2e도 봐 줘" } }, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "상태를 기다리게 바꾸는 중이에요" } }], parts: {}, sessions: {} },
 };
 const row = (sleep: AgentSleep | null) => ({ id: "row", pane_id: "w1:p2", device_id: "mac", agent_kind: "codex", sleep, state: { working: false, asking: false } }) as unknown as AgentRow;
 
