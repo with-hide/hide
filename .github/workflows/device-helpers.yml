@@ -71,8 +71,7 @@ jobs:
         timeout-minutes: 10
         with:
           set: helper
-          # TEMPORARY, reverted before review: also saves in this pull request's scope.
-          save: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
+          save: ${{ github.ref == 'refs/heads/main' }}
           target: ${{ matrix.target }}
       - uses: pnpm/action-setup@v6
         with:

@@ -38,10 +38,6 @@ on:
   schedule:
     - cron: "37 5 * * *"
   workflow_dispatch:
-  # TEMPORARY, reverted before review: saves the quick set in this pull
-  # request's own cache scope so the next run's package jobs can restore it.
-  pull_request:
-    paths: [.github/workflows/package-cache.yml]
 
 permissions:
   contents: read
@@ -85,7 +81,7 @@ jobs:
         timeout-minutes: 10
         with:
           set: quick
-          save: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
+          save: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/vt-cache
         with:
