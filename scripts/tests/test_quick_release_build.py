@@ -1,10 +1,11 @@
 """Only a pull request's package lane builds its release binaries unoptimized.
 
 A pull request checks that the app packages, installs, starts and updates, so
-it skips the release profile's LTO; main's push run, the nightly, a candidate
-and a release build what ships, and main's runs save the release dependency
-set the next build reads. docs/BUILD.md, "A pull request's release build",
-owns the measurement.
+it skips the release profile's LTO; the nightly, a candidate and a release
+build what ships, and main's runs save the release dependency set the next
+such build reads. A pull request reads the quick set instead, which
+`package-cache.yml` saves on main with the compile jobs' own steps.
+docs/BUILD.md, "A pull request's release build", owns the measurement.
 """
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOWS = ROOT / '.github' / 'workflows'
 ACTION = './.github/actions/quick-release-build'
+CACHE = './.github/actions/rust-cache'
 
 
 def load(name):
@@ -47,7 +49,32 @@ class QuickReleaseBuildTest(unittest.TestCase):
                 self.assertEqual(uses.count(ACTION), 1)
                 quick = steps[uses.index(ACTION)]
                 self.assertEqual(quick['if'], 'inputs.quick-build')
-                self.assertLess(uses.index('./.github/actions/rust-cache'), uses.index(ACTION))
+                self.assertLess(uses.index(CACHE), uses.index(ACTION))
+                # The quick build reads the set built at its settings and saves
+                # nothing; every other build reads and on main saves the release set.
+                caches = [(step['if'], step['with']['set'], step['with']['save'])
+                          for step in steps if step.get('uses') == CACHE]
+                self.assertEqual(caches, [('${{ !inputs.quick-build }}', 'release', "${{ github.ref == 'refs/heads/main' }}"),
+                                          ('inputs.quick-build', 'quick', False)])
+
+    def test_main_saves_the_quick_set_with_the_compile_jobs_own_steps(self):
+        # The same actions in the same order and the same build: rust-cache
+        # keys the environment it restores in, and cargo reuses a dependency
+        # only at the profile, features and target it was built with.
+        def shape(steps):
+            return [step.get('uses') or step['run'] for step in steps
+                    if step.get('uses') != 'actions/checkout@v7']
+        compile_steps = load('package.yml')['jobs']['windows-compile']['steps']
+        compiled = shape(compile_steps)
+        compiled = compiled[:compiled.index('bash scripts/verify-web.sh desktop package compile') + 1]
+        compiled.remove(CACHE)  # the release set's restore, which a quick build skips
+        saver = load('package-cache.yml')['jobs']['quick']
+        self.assertEqual(shape(saver['steps']), compiled)
+        self.assertEqual(saver['strategy']['matrix']['include'], [
+            {'system': 'linux', 'runner': load('package.yml')['jobs']['package']['runs-on']},
+            {'system': 'windows', 'runner': load('package.yml')['jobs']['windows-compile']['runs-on']},
+            {'system': 'macos', 'runner': 'macos-15'},
+        ])
 
 
 if __name__ == '__main__':

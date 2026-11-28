@@ -1,0 +1,108 @@
+# Main's `quick` dependency set: the third-party dependencies of a pull
+# request's package build, compiled at its settings (opt-level 1 without LTO,
+# `.github/actions/quick-release-build`) on each system `package.yml` builds
+# its release binaries on. A pull request's `compile (windows)`,
+# `compile (macos)` and `package (linux)` read it and save nothing; without it
+# they rebuilt every dependency, because the release set main keeps is built
+# at the release profile's settings (docs/BUILD.md, "CI's Rust caches").
+#
+# A set is saved only under a key that does not exist yet, and its key moves
+# only with what rust-cache hashes: the lockfile, the members' and the root
+# manifests, the pinned toolchain and the action itself. So a push to main
+# that changes one of those builds the new generation, and a daily run
+# rebuilds an entry GitHub evicted or let expire. A run whose exact entry
+# exists stops after the restore. `cache-generations.yml` then deletes the
+# generation the new one replaced.
+#
+# Each job runs the same steps as `package.yml`'s compile jobs, in the same
+# order, so its dependencies are the ones they ask for: rust-cache hashes the
+# environment at its restore, before the quick settings are set, and cargo
+# reuses a dependency only when its profile, features and target match.
+# `scripts/tests/test_quick_release_build.py` holds the two together. The
+# macOS job runs on GitHub's macos-15, where `compile (macos)` runs while the
+# Mac mini runner is off (docs/BUILD.md, The Mac mini CI runner).
+name: package cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - rust-toolchain.toml
+      - .github/actions/rust-cache/**
+      - .github/workflows/package-cache.yml
+  schedule:
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push waits for the running build rather than cancelling it, so the
+# generation it is building is still saved.
+concurrency:
+  group: package-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quick:
+    name: quick set (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      # The package script refuses to build without a version and a build
+      # order; neither reaches a dependency.
+      HIDE_VERSION: 0.0.0-ci.${{ github.run_number }}
+      HIDE_BUILD_ORDER: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: linux
+            runner: ubuntu-latest
+          - system: windows
+            runner: windows-latest
+          - system: macos
+            runner: macos-15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - id: cache
+        uses: ./.github/actions/rust-cache
+        timeout-minutes: 10
+        with:
+          set: quick
+          save: ${{ github.ref == 'refs/heads/main' }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/vt-cache
+        with:
+          save: false
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/quick-release-build
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/relay-tools
+        with:
+          save: false
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install
+      - name: Build the web shell and the release binaries at the quick settings
+        if: steps.cache.outputs.cache-hit != 'true'
+        timeout-minutes: 50
+        run: bash scripts/verify-web.sh desktop package compile

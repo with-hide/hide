@@ -1,0 +1,42 @@
+# Deletes the generations of main's dependency caches that a newer one
+# replaced, after each run on main that can save one: `verify`'s push run, the
+# nightly and `package cache`. A changed lockfile, manifest, toolchain or pin
+# saves every Rust set and hide-vt entry again under a new key, about 4 GB
+# across the sets and systems, and the repository has 10 GB of Actions cache;
+# left to GitHub, the old generations stay until eviction, which then also
+# takes current entries that are read only once a day (docs/BUILD.md, "CI's
+# Rust caches"). `scripts/cache-generations.py` owns which entries go.
+name: cache generations
+
+on:
+  workflow_run:
+    workflows: [verify, nightly, package cache]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-generations
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: delete replaced generations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Deleting a cache entry is the only write; no other job in the repository
+    # holds it.
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Keep the newest entry of each set and system
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          python3 scripts/cache-generations.py --repo "$GITHUB_REPOSITORY" | tee -a "$GITHUB_STEP_SUMMARY"
