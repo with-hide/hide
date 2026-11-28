@@ -1449,7 +1449,8 @@ mod tests {
         };
         // Listed still: the engine's own row stands, not asleep yet.
         let listed = serde_json::json!([{"id": "w1:p2", "pane_id": "w1:p2", "agent": "claude",
-            "agent_status": "idle", "agent_session": {"kind": "id", "value": "session-two"}}]);
+            "agent_status": "idle", "state_change_seq": 4,
+            "agent_session": {"kind": "id", "value": "session-two"}}]);
         assert_eq!(
             rows_of(&mut store, listed),
             [("w1:p2".to_owned(), Some("session-two".to_owned()), None)]

@@ -1935,8 +1935,8 @@ mod tests {
         let mut runtime = runtime(&node);
         let row: crate::model::SidebarAgentSnapshot = crate::sidebar::project_agents(
             serde_json::from_value(json!({"agents": [{"id": "worker", "pane_id": "w1:p1",
-                "agent": "claude", "agent_status": "idle", "cwd": "/tmp/project",
-                "agent_session": {"kind": "id", "value": SESSION}}]}))
+                "agent": "claude", "agent_status": "idle", "state_change_seq": 1,
+                "cwd": "/tmp/project", "agent_session": {"kind": "id", "value": SESSION}}]}))
             .unwrap(),
         )
         .agents
