@@ -122,7 +122,8 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
   // The job counts the plan the store holds for its pane, so the head's plan chip and the plan part agree.
   const job: DeskJob = useMemo(() => {
     const base = state === "asking" ? jobs.gallery! : jobs.conductor!;
-    return { ...base, plan: { done: plan.progress.done, total: plan.progress.total } };
+    // A sleeping session's card reads asleep: no turn of it is running.
+    return { ...base, ...(state in SLEEPS ? { state: "sleeping" as const, mark: "asleep" as const } : {}), plan: { done: plan.progress.done, total: plan.progress.total } };
   }, [jobs, plan, state]);
 
   useLayoutEffect(() => {
