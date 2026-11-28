@@ -11,7 +11,15 @@
 //       started after it was listed), and, given a root folder, every process
 //       running an executable under it; returns once none is left. Each end is
 //       waited for on the process's own handle. Exits 1, naming the survivors
-//       on stderr, when some remain after five seconds.
+//       on stderr, when some remain after five seconds. A process that has
+//       ended is not one that remains, though the system's table still names
+//       it while a handle to it is open: the packaged update test's own
+//       listing once called its app still running after the wait on it had
+//       returned (#3126). `tree` still lists such a process, since its
+//       identity finds the live processes it started. An owned id whose
+//       process cannot be opened is named as a survivor with the error: it
+//       can be neither ended nor seen to end. Processes found only by the
+//       root folder are those whose image can be read.
 //   hide-processes run <program> [<argument> ...]
 //       runs the program in a job object from its first instruction, so
 //       everything it starts, at any depth and whatever exits first, is in
@@ -61,6 +69,8 @@ typedef struct {
   DWORD parent;
   ULONGLONG created;
   char path[MAX_PATH];
+  int ended;
+  DWORD unread;
   int marked;
 } Row;
 
@@ -72,6 +82,15 @@ static ULONGLONG started(HANDLE process) {
   FILETIME created, exited, kernel, user;
   if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) return 0;
   return ((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
+}
+
+// Whether `process` has ended: its object is signalled once its last thread
+// has exited. A process opened without the right to wait on it says by its
+// exit code.
+static int ended(HANDLE process) {
+  if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) return 1;
+  DWORD code;
+  return GetExitCodeProcess(process, &code) && code != STILL_ACTIVE;
 }
 
 // Reads the live processes into `rows`.
@@ -87,9 +106,20 @@ static int snapshot(void) {
     row->parent = entry.th32ParentProcessID;
     row->created = 0;
     row->path[0] = 0;
+    row->ended = 0;
+    row->unread = 0;
     row->marked = 0;
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, row->id);
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, row->id);
+    if (!process) process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, row->id);
+    if (!process) {
+      // An id that no longer opens has ended since the table was read; any
+      // other refusal leaves whether it runs unknown.
+      DWORD error = GetLastError();
+      if (error == ERROR_INVALID_PARAMETER) row->ended = 1;
+      else row->unread = error;
+    }
     if (process) {
+      row->ended = ended(process);
       row->created = started(process);
       DWORD size = sizeof row->path;
       if (!QueryFullProcessImageNameA(process, 0, row->path, &size)) row->path[0] = 0;
@@ -114,6 +144,16 @@ static int owned_count;
 static int is_owned(DWORD id, ULONGLONG created) {
   for (int i = 0; i < owned_count; i += 1) {
     if (owned[i].id == id && owned[i].created == created) return 1;
+  }
+  return 0;
+}
+
+// An owned id whose process cannot be opened: its start cannot be read, so
+// it may be the owned process still running, and its end cannot be seen.
+static int owned_unread(const Row *row) {
+  if (!row->unread) return 0;
+  for (int i = 0; i < owned_count; i += 1) {
+    if (owned[i].id == row->id) return 1;
   }
   return 0;
 }
@@ -209,16 +249,25 @@ static int end(const char *root, int argc, char **argv) {
     owned_count += 1;
   }
   DWORD deadline = GetTickCount() + END_MS;
+  int waited = 1;
   for (;;) {
     if (!snapshot()) return 1;
     if (!grow()) return 1;
     int targets = 0;
+    int unread = 0;
     for (int i = 0; i < row_count; i += 1) {
       Row *row = &rows[i];
-      row->marked = (row->created != 0 && is_owned(row->id, row->created)) || (root[0] && row->path[0] && starts_with(row->path, root));
+      row->marked = !row->ended && ((row->created != 0 && is_owned(row->id, row->created)) || (root[0] && row->path[0] && starts_with(row->path, root)));
       if (row->marked && row->id != GetCurrentProcessId()) targets += 1;
+      if (owned_unread(row)) unread += 1;
     }
-    if (targets == 0) return 0;
+    if (targets == 0 && unread == 0) return 0;
+    // Only processes it cannot open are left: it can neither end them nor
+    // see them end, and waiting changes neither.
+    if (targets == 0) {
+      waited = 0;
+      break;
+    }
     end_marked(deadline);
     if ((LONG)(GetTickCount() - deadline) >= 0) break;
   }
@@ -227,10 +276,15 @@ static int end(const char *root, int argc, char **argv) {
   int survivors = 0;
   for (int i = 0; i < row_count; i += 1) {
     Row *row = &rows[i];
-    if (row->id == GetCurrentProcessId()) continue;
-    if ((row->created != 0 && is_owned(row->id, row->created)) || (root[0] && row->path[0] && starts_with(row->path, root))) {
-      if (survivors == 0) fprintf(stderr, "fixture processes still running after %d s:", END_MS / 1000);
-      fprintf(stderr, " %lu %s", (unsigned long)row->id, row->path);
+    if (row->id == GetCurrentProcessId() || row->ended) continue;
+    int unread = owned_unread(row);
+    if (unread || (row->created != 0 && is_owned(row->id, row->created)) || (root[0] && row->path[0] && starts_with(row->path, root))) {
+      if (survivors == 0) {
+        if (waited) fprintf(stderr, "fixture processes still running after %d s:", END_MS / 1000);
+        else fprintf(stderr, "fixture processes not seen to end:");
+      }
+      if (unread) fprintf(stderr, " %lu (cannot be opened: error %lu)", (unsigned long)row->id, (unsigned long)row->unread);
+      else fprintf(stderr, " %lu %s", (unsigned long)row->id, row->path);
       survivors += 1;
     }
   }

@@ -29,7 +29,7 @@ import { openProject, splitPane, tabPanes, waitForPaneInput } from "../../web/e2
 import { startEngine } from "../../web/e2e/engine-fixture";
 import { connectStateDir, useControl } from "../../web/e2e/hided-control.mjs";
 import { ownedHolders } from "../../web/e2e/pane-holders.mjs";
-import { fixtureExecutable } from "../../web/e2e/platform-fixture";
+import { endWindowsProcesses, fixtureExecutable, windowsProcessTree, type WindowsProcess } from "../../web/e2e/platform-fixture";
 import { panePrompt } from "../../web/e2e/pane-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { hostLog, isolate, launch, screenshot, shellPage, test } from "./fixture";
@@ -81,34 +81,77 @@ function sudoShim(): string {
   return dir;
 }
 
+/** A live process running the installed app's executable, with its arguments on Linux. */
+type AppProcess = { pid: number; args?: string };
+
 /**
- * Ends the app the installer reopened, which no test handle owns, and throws
- * only when it is still running: an app that did not reopen, or ended between
- * the lookup and the stop, is not a failure.
- *
- * On Windows the NSIS installer writes the new version to the registry, then
- * makes the shortcuts, and reopens the app last, so the version the test waits
- * for appears while the installer still runs. Ending the app before the
- * installer exits can miss the app it reopens a moment later; the installer
- * (named after its file in the feed, which the updater runs from its cache)
- * is waited for first.
+ * The live processes running the installed app's executable. A process the
+ * system still lists after it has ended is left out: on Windows the process
+ * table names it for a moment while a handle to it is open (`HasExited` reads
+ * its handle), and on Linux one waiting to be reaped is listed as
+ * `[name] <defunct>`, which does not match.
  */
-function endReopenedApp(app: string): void {
+function appProcesses(app: string): AppProcess[] {
   if (process.platform === "win32") {
-    const setup = fs.readdirSync(feed!).find(name => name.endsWith("-setup.exe"));
-    if (!setup) throw new Error(`no installer in the feed ${feed}`);
-    const installer = `Get-Process -Name '${path.parse(setup).name.replace(/'/g, "''")}' -ErrorAction SilentlyContinue`;
-    const reopened = `Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${app.replace(/'/g, "''")}' }`;
-    const script = `${installer} | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue; if (${installer}) { throw 'the installer is still running' }; ${reopened} | Stop-Process -Force -ErrorAction SilentlyContinue; ${reopened} | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; if (${reopened}) { throw 'the reopened app is still running' }`;
-    execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit" });
-  } else {
-    try {
-      execFileSync("pkill", ["-f", `^${app}( |$)`], { stdio: "inherit" });
-    } catch (error) {
-      // pkill exits 1 when nothing matched: the app did not reopen.
-      if ((error as { status?: number }).status !== 1) throw error;
+    const script = "Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:HIDE_E2E_INSTALLED_APP -and -not $_.HasExited } | ForEach-Object { $_.Id }";
+    const listed = execFileSync("pwsh", ["-NoProfile", "-Command", script], { encoding: "utf8", env: { ...process.env, HIDE_E2E_INSTALLED_APP: app } });
+    return listed.split(/\r?\n/).filter(Boolean).map((pid) => ({ pid: Number(pid) }));
+  }
+  return execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" }).split("\n").flatMap((line) => {
+    const match = /^\s*(\d+) (.*)$/.exec(line);
+    if (!match) return [];
+    const args = match[2]!;
+    return args === app || args.startsWith(`${app} `) ? [{ pid: Number(match[1]), args }] : [];
+  });
+}
+
+/**
+ * The events the new version's host logged since `since`, from its own
+ * `host.start`: empty until a host of `version` starts, and its window is
+ * shown once `window.shown visible=true` is among them. The new version
+ * writes to the profile its environment names. On Linux Electron's
+ * relauncher starts it with the old app's environment, the test's; on
+ * Windows the installer has Explorer start it, with the account's own
+ * environment, so its profile is the account's. An old process, or the
+ * relauncher waiting for one, cannot log a host of the new version.
+ */
+function reopenedEvents(env: Record<string, string>, since: string, version: string): string[] {
+  const account = process.platform === "win32" ? [{ HIDE_DESKTOP_USER_DATA_DIR: path.join(process.env.APPDATA!, "hide-desktop") }] : [];
+  for (const profile of [env, ...account]) {
+    const logged = hostLog(profile).filter((line) => String(line.ts) >= since);
+    const start = logged.findIndex((line) => line.event === "host.start" && line.version === version);
+    if (start >= 0) return logged.slice(start).map((line) => (line.event === "window.shown" ? `window.shown visible=${String(line.visible)}` : line.event));
+  }
+  return [];
+}
+
+/**
+ * Ends every process of the installed app, which after the update is the new
+ * version the update opened and no test handle owns, and returns once none
+ * is left.
+ *
+ * On Windows each one's tree is ended too: the reopened app runs with
+ * Explorer's environment, not the test's, so its `hide connect` starts a
+ * daemon in the runner's own home. `hide-processes` ends each process and
+ * waits for its end on the process's own handle, not on a listing.
+ */
+async function endReopenedApp(app: string): Promise<void> {
+  if (process.platform === "win32") {
+    const owned = new Map<string, WindowsProcess>();
+    for (const listed of appProcesses(app)) {
+      for (const item of windowsProcessTree(listed.pid)) owned.set(`${item.id}:${item.created}`, item);
+    }
+    endWindowsProcesses([...owned.values()], path.dirname(app));
+    return;
+  }
+  for (const listed of appProcesses(app)) {
+    try { process.kill(listed.pid, "SIGKILL"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
   }
+  await expect.poll(() => appProcesses(app).map((listed) => `${listed.pid} ${listed.args}`), {
+    message: "every process of the reopened app ended", timeout: 5_000, // wait-ok: the killed processes leave the process table
+  }).toEqual([]);
 }
 
 test("the installed app updates to the next version and the panes and daemon keep running", async () => {
@@ -185,12 +228,23 @@ test("the installed app updates to the next version and the panes and daemon kee
     expect(hostLog(run.env).map((line) => line.event)).toEqual(expect.arrayContaining(["update.check", "update.found", "update.ready"]));
 
     const closed = app.waitForEvent("close", { timeout: 120_000 });
+    const restarted = new Date().toISOString();
     await restart.click();
     await closed;
     app = null;
 
     // The installer of N+1 replaced N (B16) and nothing the core runs ended (D-19).
     await expect.poll(installedVersion, { timeout: 180_000, intervals: [1_000] }).toBe(next);
+    // Restart opens the new version once it is installed (B16): its host
+    // starts and shows its window. It is not the app this test launched: on
+    // Windows the installer has Explorer start it (electron-builder's NSIS
+    // `StartApp`), and Explorer does so on its own time, sometimes after the
+    // installer has exited; on Linux Electron's relauncher starts it once the
+    // old app has exited. It is ended below only once it is there, or it
+    // would start after the end and stay.
+    await expect.poll(() => reopenedEvents(run.env, restarted, next), {
+      message: `hide ${next} showed its window after the update`, timeout: 60_000, intervals: [1_000], // wait-ok: the update starts the new version
+    }).toEqual(expect.arrayContaining(["host.start", "window.shown visible=true"]));
     expect(run.daemonPid()).toBe(daemon);
     expect(await panesNow()).toBe(panes);
     expect(hostLog(run.env).map((line) => line.event)).toContain("update.install");
@@ -200,7 +254,7 @@ test("the installed app updates to the next version and the panes and daemon kee
     throw error;
   } finally {
     await app?.close().catch(() => undefined);
-    try { endReopenedApp(file); } catch (error) {
+    try { await endReopenedApp(file); } catch (error) {
       if (failed) console.log(`ending the reopened app failed: ${error instanceof Error ? error.message : String(error)}`);
       else leftRunning = error;
     }
