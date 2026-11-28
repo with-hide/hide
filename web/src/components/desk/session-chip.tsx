@@ -133,14 +133,15 @@ export function SessionCard({ job, since, parent, onOpen, onParent }: { job: Des
   const outputs = job.outputs.filter((output) => output.kind !== "pr").length;
   const place = job.location.label && job.location.label !== job.project.label ? `${job.project.label} · ${job.location.label}` : job.project.label;
   const facts = job.plan || pr || outputs > 0;
+  const words = jobStateWords(t, job);
   return (
     <div className="flex min-w-0 flex-col gap-xs px-sm py-xs text-caption" data-desk-session-card={job.pane_id ?? job.id}>
       <div className="flex min-w-0 items-center gap-xxs">
         <JobLead job={job} />
         <span className="min-w-0 truncate font-semibold text-foreground">{job.title}</span>
         <span className="ml-auto flex shrink-0 items-center gap-xxs pl-xs text-micro text-muted-foreground" data-desk-session-card-state={job.state}>
-          {jobStateWords(t, job)}
-          {since !== null ? <><span aria-hidden="true">·</span><Elapsed since={since} /></> : null}
+          {words}
+          {since !== null ? <>{words ? <span aria-hidden="true">·</span> : null}<Elapsed since={since} /></> : null}
         </span>
       </div>
       {place ? (

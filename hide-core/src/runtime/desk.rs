@@ -2214,6 +2214,12 @@ impl Runtime {
     pub(in crate::runtime) fn close_test_desk(&mut self) {
         self.desk.host.open = false;
     }
+
+    /// What Desk keeps across starts, for a test that writes it as an older
+    /// build left it.
+    pub(in crate::runtime) fn test_desk_stored(&mut self) -> &mut Stored {
+        &mut self.desk.stored
+    }
 }
 
 /// The answer that picks `option`, or cancels when the request offered none.

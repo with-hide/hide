@@ -690,7 +690,9 @@ fn desk_command(machine: &str, intent: &str) -> crate::delivery::Command {
 /// Desk's own spawn (PRD Desk 1차 B20, B21), asked as the Desk process asks
 /// it and run as hided runs it, with no record of `hide:desk` made
 /// beforehand: it starts on the device under the record it registers, its
-/// card reads working, and it takes Desk's one place, so the next waits.
+/// card reads starting while its row is not read (nothing said of what its
+/// agent does), and it takes Desk's one place, so the next waits. With its
+/// device not connected the job is open and still says nothing of its agent.
 #[test]
 fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_place() {
     let spawner = spawner();
@@ -722,9 +724,12 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
         let jobs = &runtime.snapshot.desk_jobs.as_ref().unwrap().jobs;
         let cards: Vec<_> = jobs
             .iter()
-            .map(|job| (job.id.as_str(), job.state))
+            .map(|job| (job.id.as_str(), job.state, job.activity))
             .collect();
-        assert_eq!(cards, [("first", crate::model::DeskJobState::Open)]);
+        assert_eq!(
+            cards,
+            [("first", crate::model::DeskJobState::Starting, None)]
+        );
     }
 
     let waiting = ask("second").unwrap();
@@ -746,6 +751,24 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
     assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
     drop(runtime);
     assert_eq!(spawner.count("start_agent"), 1);
+
+    let mut runtime = spawner.runtime.lock().unwrap();
+    runtime.snapshot.status.remote[0].state = "not_connected".into();
+    runtime.refresh_desk_jobs();
+    let first = runtime
+        .snapshot
+        .desk_jobs
+        .as_ref()
+        .unwrap()
+        .jobs
+        .iter()
+        .find(|job| job.id == "first")
+        .map(|job| (job.state, job.activity, job.disconnected, job.holds_place()));
+    assert_eq!(
+        first,
+        Some((crate::model::DeskJobState::Open, None, true, true)),
+        "a device not connected keeps the job open and its place, saying nothing of its agent"
+    );
 }
 
 /// An external tool's spawn (PRD hide-external-control B21, B31, c3),
@@ -2361,16 +2384,29 @@ fn a_queued_spawn_waits_while_desk_is_off_and_starts_when_it_is_on_again() {
     }
     // The start ran on the queue's thread and its answer came back to the
     // card; an earlier notice, such as the queued answer's, may come first.
+    // Its card stays starting until its row is read: the agent its spawn
+    // made, on the card, says the start ran.
+    let started = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .desk_jobs
+            .as_ref()
+            .unwrap()
+            .jobs
+            .iter()
+            .find(|job| job.id == "second")
+            .filter(|job| job.agent_id.is_some())
+            .map(|job| job.state)
+    };
     let state = loop {
         answered
             .recv_timeout(Duration::from_secs(30))
             .expect("the queued spawn never answered");
-        let state = second(&spawner.runtime.lock().unwrap());
-        if state != Some(crate::model::DeskJobState::Starting) {
+        if let Some(state) = started(&spawner.runtime.lock().unwrap()) {
             break state;
         }
     };
-    assert_eq!(state, Some(crate::model::DeskJobState::Open));
+    assert_eq!(state, crate::model::DeskJobState::Starting);
     // The second spawn made its own worktree on the device, as the first did.
     assert_eq!(spawner.count("create_worktree"), 2);
 }
