@@ -69,6 +69,10 @@ it("draws a letter's band by its arrow, name, kind and first line, opens the who
   const open = await render(<LetterBand letter={{ ...letter, direction: "sent", kind: null }} open onToggle={toggle} />);
   expect(open.querySelector("[data-letter-text]")?.textContent).toBe("1) 지웠어요\n2) 다시 돌렸어요");
   expect(open.querySelector("[data-conversation-letter] > div")?.textContent).toBe("→m110-mini-journeyLetter");
+  // A reply whose letter the record does not hold names no one.
+  const nameless = await render(<LetterBand letter={{ ...letter, direction: "sent", kind: "reply", peer: null }} open={false} onToggle={toggle} />);
+  expect(nameless.querySelector("[data-letter-peer]")).toBeNull();
+  expect(nameless.querySelector("[data-conversation-letter] > div")?.textContent).toBe("→Reply1) 지웠어요");
 });
 
 it("draws each question with its answer under it, or that it waits while asked and was not answered once it ended", async () => {

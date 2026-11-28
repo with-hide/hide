@@ -118,6 +118,19 @@ describe("a thread's screen", () => {
     });
   });
 
+  it("names a reply's addressee as the sender of the letter it answers in the same record, and no one when the record holds no such letter", () => {
+    const delivered = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "CI 다시 봐줘" }, _meta: { hide: { origin: "letter", from: "lead", kind: "request", letter: "letter-9" } } };
+    const replies: ThreadPage = {
+      record: "r1", start: 0,
+      updates: [delivered, call("r1", "hide letter reply letter-9 --intent m:a --body 고쳤어요"), call("r2", "hide letter reply letter-4 --intent m:b --body 봤어요")],
+      parts: { r1: { kind: "letter", to: null, body: "고쳤어요", letter_kind: "reply", reply_to: "letter-9" }, r2: { kind: "letter", to: null, body: "봤어요", letter_kind: "reply", reply_to: "letter-4" } },
+      sessions: { lead: { pane_id: "w1:p1", machine: "mac" } },
+    };
+    const drawn = Object.fromEntries(threadScreen(thread({ tail: replies }), null, {}, [row("w1:p1", "리드", "turn")]).lines.map((line) => [line.id, line.kind === "hide" ? line.part : line.kind]));
+    expect(drawn.r1).toMatchObject({ kind: "letter", letterKind: "reply", peer: { name: "리드", pane_id: "w1:p1" }, body: "고쳤어요" });
+    expect(drawn.r2).toMatchObject({ kind: "letter", letterKind: "reply", peer: null, body: "봤어요" });
+  });
+
   it("is being read until the record answers, and says why when it cannot be read", () => {
     expect(threadScreen(thread({ state: "loading" }), null, {}, [])).toMatchObject({ reading: true, failure: null, lines: [] });
     expect(threadScreen(thread({ state: "failed", failure: "no_record" }), null, {}, [])).toMatchObject({ reading: false, failure: "no_record" });

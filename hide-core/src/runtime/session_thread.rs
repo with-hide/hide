@@ -1638,7 +1638,7 @@ fn page_sessions(
     node: &str,
 ) -> BTreeMap<String, ThreadSession> {
     let called = parts.values().filter_map(|part| match part {
-        HideCall::Letter { to, .. } => Some(to.as_str()),
+        HideCall::Letter { to, .. } => to.as_deref(),
         HideCall::Spawn { name, agent_id, .. } => agent_id.as_deref().or(name.as_deref()),
         HideCall::Plan | HideCall::View { .. } | HideCall::Mission { .. } => None,
     });
@@ -2061,7 +2061,7 @@ mod tests {
         assert_eq!(
             kept.pages[0].parts.get("call-1"),
             Some(&HideCall::Letter {
-                to: "agent-7".to_owned(),
+                to: Some("agent-7".to_owned()),
                 body: Some("hi".to_owned()),
                 letter_kind: None,
                 reply_to: None,

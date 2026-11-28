@@ -19,7 +19,7 @@ const KIND_WORD = {
 
 /**
  * A letter's band: → when this session sent it, ← when it received it, then the other session's name (`name`, the
- * screen's own chip, or the name the record wrote), the kind's word (요청, 답장, 보고, 진행, 막힘; 편지 for one with no
+ * screen's own chip, or the name the record wrote; none for a reply whose letter the record does not hold), the kind's word (요청, 답장, 보고, 진행, 막힘; 편지 for one with no
  * kind), its first line while folded, and a chevron. Open, the band holds the whole letter under its head, words a
  * reader can select. The band spans the conversation's width, as the doorbell's rows span a terminal's.
  */
@@ -32,7 +32,7 @@ export function LetterBand({ letter, open, onToggle, name }: { letter: Letter; o
       <RowOverlayButton className="rounded-none" aria-label={t(letter.direction === "sent" ? "conversation.letter.sent" : "conversation.letter.received", { name: peer })} aria-expanded={open} onClick={onToggle} />
       <div className="pointer-events-none relative flex min-w-0 items-center gap-sm">
         <span aria-hidden="true" className="w-(--size-icon) shrink-0 text-center font-bold">{letter.direction === "sent" ? "→" : "←"}</span>
-        <span className="pointer-events-auto min-w-0 max-w-2/5 shrink-0 truncate font-semibold" data-letter-peer="true">{name ?? peer}</span>
+        {name || letter.peer ? <span className="pointer-events-auto min-w-0 max-w-2/5 shrink-0 truncate font-semibold" data-letter-peer="true">{name ?? letter.peer?.name}</span> : null}
         <span className="shrink-0 rounded-xs border border-terminal-letter-text/40 px-xs text-micro">{t(letter.kind ? KIND_WORD[letter.kind] : "conversation.letter.kind.letter")}</span>
         <span className="min-w-0 flex-1 truncate opacity-(--opacity-secondary)">{open ? null : letter.first}</span>
         <Chevron aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />

@@ -3,7 +3,7 @@
 // `session_thread_history` and the page the session is still writing in
 // `session_thread`, each on its own revision; the screen draws them as one.
 
-import { letterKindOf, threadLines, type AcpSessionUpdate, type DeskOutput, type DeskSessionRef, type ThreadHidePart, type ThreadLine, type ThreadReadFailure } from "./desk";
+import { letterKindOf, threadLines, type AcpMeta, type AcpSessionUpdate, type DeskOutput, type DeskSessionRef, type ThreadHidePart, type ThreadLine, type ThreadReadFailure } from "./desk";
 import { missionCounts, missionTurn } from "./missions";
 import { heldBy } from "./components/mission-hold";
 import type { AgentRow, MissionsSnapshot, PlansSnapshot, PlanView, SessionThreadHistorySection, SessionThreadSection, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
@@ -80,9 +80,15 @@ export function threadScreen(thread: SessionThreadSection | null, history: Sessi
   };
   const plan = thread?.pane_id ? (held.plans?.items.find((one) => one.pane_id === thread.pane_id) ?? null) : null;
   const lastPlan = [...conversation.updates].reverse().find((update) => update.sessionUpdate === "tool_call" && conversation.parts[update.toolCallId as string]?.kind === "plan")?.toolCallId as string | undefined;
+  // Who sent each letter the record delivered in its envelope, by the letter's id, so a reply to it names them.
+  const replied = new Map<string, string>();
+  for (const update of conversation.updates) {
+    const hide = (update._meta as AcpMeta | undefined)?.hide;
+    if (hide?.letter && hide.from) replied.set(hide.letter, hide.from);
+  }
   const parts: Record<string, ThreadHidePart> = {};
   for (const [id, part] of Object.entries(conversation.parts)) {
-    const drawn = hidePart(part, { session, plan: id === lastPlan ? plan : null, missions: held.missions });
+    const drawn = hidePart(part, { session, replied, plan: id === lastPlan ? plan : null, missions: held.missions });
     if (drawn) parts[id] = drawn;
   }
   return {
@@ -92,7 +98,7 @@ export function threadScreen(thread: SessionThreadSection | null, history: Sessi
   };
 }
 
-function hidePart(part: ThreadPart, found: { session: (name: string) => DeskSessionRef; plan: PlanView | null; missions: MissionsSnapshot | undefined }): ThreadHidePart | null {
+function hidePart(part: ThreadPart, found: { session: (name: string) => DeskSessionRef; replied: ReadonlyMap<string, string>; plan: PlanView | null; missions: MissionsSnapshot | undefined }): ThreadHidePart | null {
   switch (part.kind) {
     case "plan":
       return found.plan ? { kind: "plan", plan: found.plan, target: "plan" } : null;
@@ -104,8 +110,10 @@ function hidePart(part: ThreadPart, found: { session: (name: string) => DeskSess
       return { kind: "spawn", session: placed.mark === null && part.name ? { ...placed, name: part.name } : placed, target: `spawn:${placed.pane_id ?? named}` };
     }
     case "letter": {
-      const peer = found.session(part.to);
-      return { kind: "letter", peer, body: (part.body ?? "").trim(), letterKind: letterKindOf(part.letter_kind), target: `letter:${peer.pane_id ?? part.to}` };
+      // A reply names the letter it answers: its addressee is that letter's sender when the record delivered it, else no one named.
+      const to = part.to ?? (part.reply_to ? found.replied.get(part.reply_to) : undefined) ?? null;
+      const peer = to === null ? null : found.session(to);
+      return { kind: "letter", peer, body: (part.body ?? "").trim(), letterKind: letterKindOf(part.letter_kind), target: `letter:${peer?.pane_id ?? to ?? part.reply_to ?? ""}` };
     }
     case "view": {
       const output = viewOutput(part.view, part.target);

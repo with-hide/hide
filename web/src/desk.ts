@@ -315,6 +315,8 @@ export type AcpMeta = {
   hide?: {
     origin?: "letter" | "interrupted";
     from?: string;
+    /** The id of a letter delivered in its envelope, which a reply in the record names. */
+    letter?: string;
     kind?: string;
     summary?: string;
     truncated?: boolean;
@@ -380,7 +382,7 @@ export type ThreadHidePart = (
   /** A new session this one handed work to. */
   | { kind: "spawn"; session: DeskSessionRef }
   /** A letter this session sent, to the other session, with its whole body and its kind. */
-  | { kind: "letter"; peer: DeskSessionRef; body: string; letterKind: LetterKind | null }
+  | { kind: "letter"; peer: DeskSessionRef | null; body: string; letterKind: LetterKind | null }
   | { kind: "view"; output: DeskOutput; view_id: string | null }
   | { kind: "mission"; mission: DeskMission }
   | { kind: "pr"; number: number; state: PrState }

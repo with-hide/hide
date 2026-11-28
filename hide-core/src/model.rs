@@ -12295,7 +12295,7 @@ mod wire_enum_tests {
                 agent_id: None,
             },
             hide_session::thread::HideCall::Letter {
-                to: String::new(),
+                to: None,
                 body: None,
                 letter_kind: None,
                 reply_to: None,

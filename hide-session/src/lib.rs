@@ -64,7 +64,7 @@ pub mod usage;
 pub use account::Accounts;
 pub use bell_line::{BellLine, bell_line, bell_sender, is_bell_line};
 pub use envelope::{
-    envelope_from_operator, envelope_header, envelope_names, envelope_sender, envelope_words,
+    envelope_from_operator, envelope_header, envelope_names, envelope_sender, envelope_id, envelope_words,
     is_letter,
 };
 pub use named_prs::NamedPr;

@@ -64,6 +64,15 @@ fn pointer(line: &str) -> bool {
         .is_some_and(|rest| rest.contains(" show "))
 }
 
+/// The id of the letter an envelope delivers (`Hide letter <id> from …`),
+/// which a reply in the same record names as the letter it answers.
+pub fn envelope_id(text: &str) -> Option<&str> {
+    envelope_header(text)?;
+    let first = text.trim_start().lines().next()?.trim();
+    let (id, _) = first.strip_prefix("Hide letter ")?.split_once(" from ")?;
+    Some(id)
+}
+
 /// The canonical envelope sender and kind, for work-giver attribution.
 pub fn envelope_header(text: &str) -> Option<(String, String)> {
     let first = text.trim_start().lines().next()?.trim();

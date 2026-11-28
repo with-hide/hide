@@ -324,9 +324,11 @@ impl Thread {
                     // A letter names who wrote it and its kind, for the band
                     // that says whom it came from (`_meta.hide.from`,
                     // `_meta.hide.kind`): from its envelope, whose header
-                    // line those marks then carry, so its words are what
-                    // follow; or from the doorbell's line, whose first line
-                    // of the letter is `_meta.hide.summary`.
+                    // line those marks then carry with the letter's id
+                    // (`_meta.hide.letter`, which a reply in the record names),
+                    // so its words are what follow; or from the doorbell's
+                    // line, whose first line of the letter is
+                    // `_meta.hide.summary`.
                     let envelope = (origin == Origin::Letter)
                         .then(|| crate::envelope_header(text))
                         .flatten();
@@ -334,10 +336,12 @@ impl Thread {
                         .then(|| crate::bell_line(text))
                         .flatten();
                     let letter = match (&envelope, bell) {
-                        (Some((from, kind)), _) => Some(vec![
-                            ("from", json!(from)),
-                            ("kind", json!(kind)),
-                        ]),
+                        (Some((from, kind)), _) => Some(
+                            [("from", json!(from)), ("kind", json!(kind))]
+                                .into_iter()
+                                .chain(crate::envelope_id(text).map(|id| ("letter", json!(id))))
+                                .collect(),
+                        ),
                         (None, Some(bell)) => Some(
                             [("from", json!(bell.sender))]
                                 .into_iter()
@@ -831,9 +835,13 @@ mod tests {
         assert_eq!(updates[0]["content"]["text"], json!("CI 다시 봐줘\n둘째 줄"));
         assert_eq!(updates[0]["_meta"]["hide"]["from"], json!("ci-lead"));
         assert_eq!(updates[0]["_meta"]["hide"]["kind"], json!("request"));
+        // Its id, which a reply in the same record names.
+        assert_eq!(updates[0]["_meta"]["hide"]["letter"], json!("letter-1"));
         assert_eq!(updates[1]["content"]["text"], json!("🦉 m110 답장: 1) 지웠어요 · hide inbox"));
         assert_eq!(updates[1]["_meta"]["hide"]["origin"], json!("letter"));
         assert_eq!(updates[1]["_meta"]["hide"]["kind"], json!("reply"));
+        // A doorbell's line names no letter id.
+        assert!(updates[1]["_meta"]["hide"].get("letter").is_none());
         assert_eq!(updates[1]["_meta"]["hide"]["summary"], json!("1) 지웠어요"));
     }
 

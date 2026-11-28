@@ -3956,7 +3956,8 @@ export type ThreadPart =
   | { kind: "plan" }
   | { kind: "spawn"; name: string | null; intent: string | null; agent_id: string | null }
   /** `letter_kind` is `--kind` as typed and `reply_to` the letter it answers; absent from an older reader. */
-  | { kind: "letter"; to: string; body: string | null; letter_kind?: string | null; reply_to?: string | null }
+  /** `to` is null for a reply (`hide letter reply <id>`), which names the letter it answers (`reply_to`) and not its addressee. */
+  | { kind: "letter"; to: string | null; body: string | null; letter_kind?: string | null; reply_to?: string | null }
   /** `view_id`: the View the call's answer named, by which the session's View is found; null when it printed none (a refused open, an older reader). */
   | { kind: "view"; view: "browser" | "file" | "diff"; target: string; view_id?: string | null }
   | { kind: "mission"; mission: string | null };

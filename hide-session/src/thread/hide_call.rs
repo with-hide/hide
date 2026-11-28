@@ -23,9 +23,12 @@ pub enum HideCall {
     /// `hide letter send <to>`: a letter, with its body when it was written
     /// on the command line, its `--kind` as typed (`request`, `report`,
     /// `progress`, `block`; `letter_kind`, since `kind` names the part) and
-    /// the letter it answers (`--reply-to`).
+    /// the letter it answers (`--reply-to`). `hide letter reply <id>` is a
+    /// letter of kind `reply` to the letter `<id>`: the command names no
+    /// addressee (`to` is none), so a screen finds it as that letter's
+    /// sender in the same record (`_meta.hide.letter`).
     Letter {
-        to: String,
+        to: Option<String>,
         body: Option<String>,
         #[serde(default)]
         letter_kind: Option<String>,
@@ -129,10 +132,16 @@ fn read(args: &[String]) -> Option<HideCall> {
             agent_id: None,
         }),
         ("letter", Some("send")) => Some(HideCall::Letter {
-            to: positional(tail, &["--intent", "--body", "--kind", "--reply-to"])?.to_owned(),
+            to: Some(positional(tail, &["--intent", "--body", "--kind", "--reply-to"])?.to_owned()),
             body: option(tail, "--body"),
             letter_kind: option(tail, "--kind"),
             reply_to: option(tail, "--reply-to"),
+        }),
+        ("letter", Some("reply")) => Some(HideCall::Letter {
+            to: None,
+            body: option(tail, "--body"),
+            letter_kind: Some("reply".to_owned()),
+            reply_to: Some(positional(tail, &["--intent", "--body"])?.to_owned()),
         }),
         ("browser" | "file" | "diff", Some("open")) => Some(HideCall::View {
             view: match verb.as_str() {
@@ -186,7 +195,7 @@ mod tests {
 
     fn letter(to: &str, body: Option<&str>, kind: Option<&str>) -> HideCall {
         HideCall::Letter {
-            to: to.to_owned(),
+            to: Some(to.to_owned()),
             body: body.map(str::to_owned),
             letter_kind: kind.map(str::to_owned),
             reply_to: None,
@@ -226,10 +235,20 @@ mod tests {
             (
                 "hide letter send agent-7 --kind=request --reply-to letter-5 --intent m:a --body ok",
                 Some(HideCall::Letter {
-                    to: "agent-7".to_owned(),
+                    to: Some("agent-7".to_owned()),
                     body: Some("ok".to_owned()),
                     letter_kind: Some("request".to_owned()),
                     reply_to: Some("letter-5".to_owned()),
+                }),
+            ),
+            // A reply names the letter it answers, not its addressee.
+            (
+                "hide letter reply letter-9 --intent m:a --body \"고쳤어요\"",
+                Some(HideCall::Letter {
+                    to: None,
+                    body: Some("고쳤어요".to_owned()),
+                    letter_kind: Some("reply".to_owned()),
+                    reply_to: Some("letter-9".to_owned()),
                 }),
             ),
             (
