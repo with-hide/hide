@@ -85,11 +85,21 @@ function sudoShim(): string {
  * Ends the app the installer reopened, which no test handle owns, and throws
  * only when it is still running: an app that did not reopen, or ended between
  * the lookup and the stop, is not a failure.
+ *
+ * On Windows the NSIS installer writes the new version to the registry, then
+ * makes the shortcuts, and reopens the app last, so the version the test waits
+ * for appears while the installer still runs. Ending the app before the
+ * installer exits can miss the app it reopens a moment later; the installer
+ * (named after its file in the feed, which the updater runs from its cache)
+ * is waited for first.
  */
 function endReopenedApp(app: string): void {
   if (process.platform === "win32") {
+    const setup = fs.readdirSync(feed!).find(name => name.endsWith("-setup.exe"));
+    if (!setup) throw new Error(`no installer in the feed ${feed}`);
+    const installer = `Get-Process -Name '${path.parse(setup).name.replace(/'/g, "''")}' -ErrorAction SilentlyContinue`;
     const reopened = `Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${app.replace(/'/g, "''")}' }`;
-    const script = `${reopened} | Stop-Process -Force -ErrorAction SilentlyContinue; ${reopened} | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; if (${reopened}) { throw 'the reopened app is still running' }`;
+    const script = `${installer} | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue; if (${installer}) { throw 'the installer is still running' }; ${reopened} | Stop-Process -Force -ErrorAction SilentlyContinue; ${reopened} | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; if (${reopened}) { throw 'the reopened app is still running' }`;
     execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit" });
   } else {
     try {
