@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import ci
 from agent_journey.journey import Journey
 from agent_journey.cli import budget_failures, hide_ai_requests, leftover_copies, measured_clone, provider_keys
-from agent_journey.local import (ROUTES, agy_login_refusal, claude_session_folders, disable_hide_ai, link_operator,
+from agent_journey.local import (ROUTES, agy_home, agy_login_refusal, claude_session_folders, disable_hide_ai,
                                   opencode_key_names, wrapper)
 from agent_journey.report import markdown
 
@@ -103,12 +103,14 @@ class LocalStarts(unittest.TestCase):
         self.assertEqual(argv, ["--resume", "session-1"])
         self.assertEqual(variables["HOME"], str(home))
         self.assertEqual(variables["AGY_CLI_DISABLE_AUTO_UPDATE"], "1")
-        # Its sign-in is the operator's keychain, reached through the link, never copied.
-        for relative in ROUTES["agy"]["links"]:
-            link_operator(home, operator, relative)
+        # Its sign-in is the operator's keychain, reached through the link, never copied,
+        # and its first-run onboarding is finished, so no notice takes the journey's input.
+        agy_home(home, operator)
         self.assertTrue((home / "Library/Keychains").is_symlink())
         self.assertEqual((home / "Library/Keychains/login.keychain-db").read_bytes(), b"operator")
         self.assertEqual(ROUTES["agy"]["copies"], [])
+        onboarding = json.loads((home / ".gemini/antigravity-cli/cache/onboarding.json").read_text())
+        self.assertTrue(onboarding["onboardingComplete"])
 
     def test_agy_is_measured_only_when_its_model_list_answers(self):
         # `agy models` as agy 1.5.18 answered it signed in and in a HOME without its keychain.

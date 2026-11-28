@@ -36,8 +36,8 @@ from . import scene
 from .journey import STEPS, Journey, token
 from .own_runtime import OwnRuntime
 from .routes import allow_hook_records, allow_hook_route, operator_routing
-from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
-                    disable_hide_ai, link_operator, opencode_model, operator_trust, route, wrapper)
+from .local import (ROUTES, TRUST, agy_home, allow_one_shot_references, claude_config, claude_session_folders,
+                    disable_hide_ai, opencode_model, operator_trust, route, wrapper)
 from .report import save, table_lines
 
 KIT_SECONDS = 90
@@ -316,7 +316,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
         elif kind == "claude":
             claude_config(runtime.home, root)
         elif kind == "agy":
-            ci.agy_onboarded(runtime.home)
+            agy_home(runtime.home, operator)
         elif kind == "opencode":
             keys, refusal = provider_keys(runtime, kind, opencode_model(operator, runtime.home / opencode_service.CONFIG))
             agent["key_env"] = sorted(keys)
@@ -331,11 +331,6 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             # makes its XDG data folder 0755), and the login copy below
             # refuses a folder that is not private.
             private_directory(private)
-        if not fake:
-            # Before the CLI's first run, `--version` below; a fake model
-            # needs no login, so none is reachable.
-            for relative in entry["links"]:
-                link_operator(runtime.home, operator, relative)
         launch = wrapper(runtime.bin, executables[key], operator, runtime.state, kind, runtime.home, sandbox,
                          os.environ.get("PATH", ""), extra, keys, rows[key]["account_vars"])
         environment = {**clean_env(), "HOME": str(operator), "TMPDIR": str(run / "agent-tmp")}

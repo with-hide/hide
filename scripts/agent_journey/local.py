@@ -68,7 +68,6 @@ ROUTES = {
         "untrusted": None,
         "config": None,
         "copies": [],
-        "links": [],
         "login": lambda root, status, margin: claude_login_refusal(*status(["auth", "status"])),
     },
     "codex": {
@@ -83,7 +82,6 @@ ROUTES = {
         "config": ".codex",
         "copies": [[".codex/auth.json", "auth.json"]],
         "provenance": "A private CODEX_HOME holding a copy of the login (docs/AI_PROVIDERS.md); a refresh stays in the copy.",
-        "links": [],
         "login": lambda root, status, margin: codex_login_refusal(root / "auth.json"),
     },
     "grok": {
@@ -100,7 +98,6 @@ ROUTES = {
         "config": ".grok",
         "copies": [[".grok/auth.json", "auth.json"]],
         "provenance": "A private GROK_HOME holding a copy of the login; a refresh stays in the copy.",
-        "links": [],
         "login": lambda root, status, margin: grok_login_refusal(root / "auth.json", margin),
     },
     "pi": {
@@ -117,7 +114,6 @@ ROUTES = {
         "config": ".pi/agent",
         "copies": [[".pi/agent/auth.json", "auth.json"]],
         "provenance": "A private PI_CODING_AGENT_DIR holding a copy of the login; a refresh stays in the copy.",
-        "links": [],
         "login": lambda root, status, margin: pi_login_refusal(root / "auth.json", margin),
     },
     "omp": {
@@ -138,7 +134,6 @@ ROUTES = {
         "copies": [[".omp/agent/agent.db", "agent.db"], [".omp/agent/config.yml", "config.yml"]],
         "provenance": "The daemon's private HOME holding a copy of the login database and model roles; a refresh "
                       "stays in the copy.",
-        "links": [],
         "login": lambda root, status, margin: omp_login_refusal(root / "agent.db", margin),
     },
     "opencode": {
@@ -159,7 +154,6 @@ ROUTES = {
         "copies": [[".local/share/opencode/auth.json", "auth.json"]],
         "provenance": "Private XDG folders holding a copy of the login, the operator's model choice and a private "
                       "server port; a refresh stays in the copy.",
-        "links": [],
         "login": lambda root, status, margin: opencode_login_refusal(root / "auth.json", margin),
     },
     "agy": {
@@ -169,10 +163,8 @@ ROUTES = {
         # takes settings.json keys, not a hooks file (measured 2026-11-28).
         # So it runs in the daemon's private HOME, as omp does, where the kit
         # writes its hooks and Hide's reader reads its sessions, and the
-        # operator's own hooks file is never read. Its sign-in is one keychain
-        # item, which agy finds through HOME's Library/Keychains: that folder
-        # is linked to the operator's, so the login stays the operator's own
-        # item and is never copied.
+        # operator's own hooks file is never read; agy_home reaches its
+        # sign-in from there.
         "env": lambda home: {"HOME": str(home)},
         "unset": [],
         "sessions": lambda operator, home: home,
@@ -182,7 +174,6 @@ ROUTES = {
         "untrusted": None,
         "config": None,
         "copies": [],
-        "links": ["Library/Keychains"],
         "login": lambda root, status, margin: agy_login_refusal(*status(["models"])),
     },
 }
@@ -241,13 +232,30 @@ def wrapper(directory, executable, operator, state, kind, home, sandbox, path, e
     return target
 
 
-def link_operator(home, operator, relative):
-    """The operator's folder at `relative` under the private `home`, as a
-    link made before the agent first runs: what an agent finds there is the
-    operator's own, read and changed in place, never a copy."""
-    path = home / relative
-    private_directory(path.parent)
-    path.symlink_to(operator / relative, target_is_directory=True)
+def agy_onboarded(home):
+    """agy's first-run onboarding (a color scheme, then a security notice)
+    finished, the status it saves in `cache/onboarding.json`, as an account's
+    own agy keeps it once it has been used. In a HOME without it the
+    onboarding opens over the first prompt and can hold it, so the start
+    answers nothing (agy 1.5.18 writes it unfinished in a new HOME, and its
+    notice then took a signed-in journey's later input, 2026-11-28)."""
+    folder = home / ".gemini/antigravity-cli/cache"
+    private_directory(folder)
+    write_private(folder / "onboarding.json", json.dumps({
+        "onboardingComplete": True, "consumerOnboardingComplete": True,
+        "enterpriseOnboardingComplete": False}).encode())
+
+
+def agy_home(home, operator):
+    """The daemon home a signed-in agy runs in (ROUTES), made before agy
+    first runs: its first-run onboarding finished, as the operator's own agy
+    keeps it, and HOME's `Library/Keychains`, where agy finds its sign-in
+    (one keychain item), linked to the operator's, so the login stays the
+    operator's own item, read and refreshed in place and never copied."""
+    agy_onboarded(home)
+    keychains = home / "Library/Keychains"
+    private_directory(keychains.parent)
+    keychains.symlink_to(operator / "Library/Keychains", target_is_directory=True)
 
 
 def disable_hide_ai(home):
